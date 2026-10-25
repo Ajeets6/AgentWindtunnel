@@ -7,8 +7,9 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
+    "jsx": "react-jsx",
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["packages/**/*.ts", "apps/server/**/*.ts", "tests/**/*.ts"]
+  "include": ["packages/**/*.ts", "apps/**/*.ts", "apps/**/*.tsx", "tests/**/*.ts"]
 }

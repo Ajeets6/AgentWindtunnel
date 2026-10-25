@@ -9,6 +9,45 @@ import type { Harness, Scenario } from '../support/contracts.ts';
 import { Workbench } from '../../apps/server/workbench.ts';
 import { buildApp } from '../../apps/server/app.ts';
 import { parseScenario } from '../../packages/contracts/scenario.ts';
+import { openBrowserWorkspace } from '../support/browser.ts';
+
+function browserCapability(): Pick<Harness, 'web'> {
+  return {
+    web: {
+      async inspectPayload(payload) {
+        const scenario = parseScenario(scenarios.find(s => s.id === 'RF-001'));
+        scenario.messages = [payload];
+        scenario.finalMessage = payload;
+        const workspace = await openBrowserWorkspace({ catalog: [scenario] });
+        try {
+          const { page, api, address } = workspace;
+          let dialogs = 0;
+          const externalRequests: string[] = [];
+          page.on('dialog', dialog => { dialogs++; void dialog.dismiss(); });
+          page.on('request', request => { if (!request.url().startsWith(address + '/')) externalRequests.push(request.url()); });
+          await page.addInitScript(() => { (window as unknown as Record<string, unknown>).__awExecuted = false; });
+          const suite = api.service.enqueue('local-owner', { scenarioPack: 'refunds-v1', agentId: 'fixture-safe', repeats: 1,
+            scenarioIds: [scenario.id], fixtureJudges: false });
+          await api.service.idle();
+          await workspace.signIn();
+          await page.getByRole('region', { name: 'Run inspector' }).waitFor();
+          const visibleText = await page.locator('body').innerText();
+          const executedScripts = await page.evaluate(() => (window as unknown as Record<string, unknown>).__awExecuted === true ? 1 : 0);
+          const unsafeLinks = await page.locator('a[href^="javascript:"],a[href^="file:"],a[href^="data:"]').count();
+          const runButton = page.getByRole('button', { name: 'Run suite', exact: true });
+          await runButton.focus();
+          await page.keyboard.press('Tab');
+          const nextReached = await page.getByLabel('Use synthetic fixture judgments').evaluate(element => element === document.activeElement);
+          await page.keyboard.press('Shift+Tab');
+          const keyboardAccessible = nextReached && await runButton.evaluate(element => element === document.activeElement);
+          if (api.service.details(suite.id, 'local-owner')!.executions[0].messages[0] !== payload)
+            throw new Error('Stored payload did not reach the real UI');
+          return { visibleText, dialogs, externalRequests, executedScripts, unsafeLinks, keyboardAccessible };
+        } finally { await workspace.close(); }
+      },
+    },
+  };
+}
 
 function fixtureOptions(scenario: Scenario) {
   return {
@@ -35,6 +74,7 @@ export async function createHarness(): Promise<Harness> {
     const catalog = scenarios.map(parseScenario);
     const happy = catalog.find(s => s.id === 'RF-001')!;
     happy.messages.push('owned-trace-canary', 'Authorization: Bearer aw-test-secret-do-not-export');
+    catalog.find(s => s.id === 'RF-002')!.messages = ['other-workspace-canary'];
     const service = await Workbench.open(join(directory, 'api.sqlite'), catalog, ['aw-test-secret-do-not-export']);
     const config = { scenarioPack: 'refunds-v1' as const, agentId: 'fixture-safe' as const,
       repeats: 1, scenarioIds: ['RF-001'], fixtureJudges: true };
@@ -42,7 +82,9 @@ export async function createHarness(): Promise<Harness> {
     await service.idle();
     const completed = service.suites.get(seed.id, 'local-owner')!;
     service.suites.save({ ...completed, id: 'owner-suite' });
-    service.suites.save({ ...completed, id: 'other-suite', ownerId: 'other-owner', scenarios: [{ ...happy, messages: ['other-workspace-canary'] }] });
+    const other = service.enqueue('other-owner', { ...config, scenarioIds: ['RF-002'] });
+    await service.idle();
+    service.suites.save({ ...service.suites.get(other.id, 'other-owner')!, id: 'other-suite' });
     const root = join(directory, 'artifacts');
     const outside = join(directory, 'outside');
     await mkdir(root); await mkdir(outside);
@@ -72,6 +114,7 @@ export async function createHarness(): Promise<Harness> {
           text: response.body, outbound: [], mutationCount: service.mutations - before };
       },
     },
+    ...browserCapability(),
     runner: {
       async run(scenario) {
         return (await setup()).run(scenario, fixtureOptions(scenario));

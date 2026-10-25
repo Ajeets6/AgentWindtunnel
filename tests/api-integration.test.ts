@@ -101,7 +101,7 @@ test('SSE replays durable progress after Last-Event-ID over an actual HTTP conne
   const address = await api.app.listen({ host: '127.0.0.1', port: 0 });
   const response = await new Promise<{ status: number; type: string; text: string }>((resolve, reject) => {
     const request = get(`${address}/api/suites/${suite.id}/events`, {
-      headers: { ...api.headers, 'last-event-id': String(cursor) },
+      headers: { ...api.headers, host: new URL(address).host, origin: address, 'last-event-id': String(cursor) },
     }, response => {
       response.once('data', chunk => {
         resolve({ status: response.statusCode!, type: String(response.headers['content-type']), text: String(chunk) });

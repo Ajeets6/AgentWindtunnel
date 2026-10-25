@@ -7,15 +7,18 @@
     "node": ">=24.15.0"
   },
   "scripts": {
+    "build": "vite build --config apps/web/vite.config.ts",
+    "dev": "npm run build && npm start",
     "start": "node apps/server/main.ts",
     "test:api": "node --test tests/api-security.test.ts tests/api-integration.test.ts",
     "typecheck": "tsc --noEmit",
     "test:runner": "node --test tests/simulator.test.ts tests/runner.test.ts tests/runner-integration.test.ts",
     "simulate": "node packages/cli/main.ts",
-    "test": "node scripts/test.mjs",
+    "test": "npm run build && node scripts/test.mjs",
     "test:watch": "node scripts/test.mjs --watch",
     "test:fixtures": "node --test tests/fixtures.test.ts tests/harness.test.ts",
-    "test:release": "node scripts/test.mjs --strict"
+    "test:release": "npm run build && node scripts/test.mjs --strict",
+    "test:web": "npm run build && node --test tests/web-security.test.ts tests/web-integration.test.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",

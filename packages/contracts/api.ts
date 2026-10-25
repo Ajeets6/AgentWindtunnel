@@ -1,4 +1,4 @@
-import type { RunResult, Scenario } from './scenario.ts';
+import type { RunResult, Scenario, Event, Check } from './scenario.ts';
 
 export type SuiteConfig = {
   scenarioPack: 'refunds-v1'; agentId: 'fixture-safe'; repeats: number;
@@ -12,3 +12,9 @@ export type Suite = {
   total: number;
 };
 export type SuiteEvent = { id: number; type: 'progress'; data: { status: Suite['status']; completed: number; total: number; executionId?: string } };
+export type ExecutionView = Suite['executions'][number] & {
+  title: string; result?: RunResult; before: Scenario['initial'];
+  after: { now: string; verified: boolean; orders: Scenario['initial']['orders'] };
+  events: Event[]; checks: Check[]; messages: string[]; finalMessage: string;
+};
+export type SuiteDetail = Omit<Suite, 'executions'> & { executions: ExecutionView[] };

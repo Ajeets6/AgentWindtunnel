@@ -21,8 +21,10 @@ export async function buildApp(options: {
   workbench: Workbench; origin?: string; artifactRoot: string; webRoot?: string;
 }) {
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024, requestTimeout: 15000, routerOptions: { maxParamLength: 256 } });
-  const origin = options.origin ?? 'http://127.0.0.1:3000';
-  const host = new URL(origin).host;
+  function expectedOrigin() {
+    const address = app.server.address();
+    return options.origin ?? (address && typeof address !== 'string' ? `http://127.0.0.1:${address.port}` : 'http://127.0.0.1:3000');
+  }
   const sessions = new Sessions();
   let bootstrapToken = token();
   const service = options.workbench;
@@ -34,6 +36,8 @@ export async function buildApp(options: {
     catch { done(Object.assign(new Error('Invalid JSON body'), { statusCode: 400 }), undefined); }
   });
   app.addHook('onRequest', async (request, reply) => {
+    const origin = expectedOrigin();
+    const host = new URL(origin).host;
     reply.headers({ 'Content-Security-Policy': csp, 'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store', 'Cross-Origin-Resource-Policy': 'same-origin' });
     if (request.headers.host !== host || (request.headers.origin !== undefined && request.headers.origin !== origin))
@@ -63,7 +67,7 @@ export async function buildApp(options: {
   app.addHook('preSerialization', async (_request, _reply, payload) => redact(payload, service.secrets));
 
   app.post('/api/session/bootstrap', async (request, reply) => {
-    if (request.headers.origin !== origin) return reply.code(403).send({ error: 'Origin required' });
+    if (request.headers.origin !== expectedOrigin()) return reply.code(403).send({ error: 'Origin required' });
     const parsed = z.strictObject({ token: z.string().max(128) }).safeParse(request.body);
     if (!parsed.success || !bootstrapToken || !equal(parsed.data.token, bootstrapToken))
       return reply.code(401).send({ error: 'Invalid or expired sign-in link' });
