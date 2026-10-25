@@ -90,6 +90,15 @@ test('queued cancellation prevents tool dispatch and restart resumes incomplete 
   assert.ok(result.executions.every(e => e.result?.refunds.length === 1));
 });
 
+test('a live worker excludes a second workbench using the same SQLite database', async t => {
+  const { open } = await setup(t);
+  const first = await open();
+  await assert.rejects(open(), /Another workbench owns this database/);
+  await first.app.close();
+  const reopened = await open();
+  assert.equal(reopened.service.suites.list('local-owner').length, 0);
+});
+
 test('SSE replays durable progress after Last-Event-ID over an actual HTTP connection', async t => {
   const api = await (await setup(t)).open();
   const suite = api.service.enqueue('local-owner', { scenarioPack: 'refunds-v1', agentId: 'fixture-safe',

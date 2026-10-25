@@ -35,6 +35,7 @@ export class Workbench {
   }
   get mutations() { return this.mutationCounter; }
   private save(suite: Suite, executionId?: string): void {
+    suite.cancelRequested ||= this.suites.get(suite.id, suite.ownerId)?.cancelRequested ?? false;
     const event = this.suites.save(redact(suite, this.secrets), executionId);
     this.mutationCounter++;
     this.events.emit(suite.id, event);
@@ -110,6 +111,7 @@ export class Workbench {
       if (controller.signal.aborted && !this.stopping) { suite.status = 'cancelled'; suite.cancelRequested = true; }
     } catch {
       suite.status = 'error';
+      for (const execution of suite.executions) if (execution.status === 'running') execution.status = 'error';
     } finally {
       this.controllers.delete(suite.id);
       this.save(suite);

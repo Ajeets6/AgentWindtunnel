@@ -1,15 +1,30 @@
 import { DatabaseSync } from 'node:sqlite';
+import { randomUUID } from 'node:crypto';
 import type { Suite, SuiteEvent } from '../../packages/contracts/api.ts';
 
 export class SuiteStore {
   private db: DatabaseSync;
+  private workerToken = randomUUID();
   constructor(path: string) {
     this.db = new DatabaseSync(path);
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS suites (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, document TEXT NOT NULL) STRICT;
       CREATE TABLE IF NOT EXISTS suite_events (suite_id TEXT NOT NULL, sequence INTEGER NOT NULL, document TEXT NOT NULL,
         PRIMARY KEY(suite_id, sequence)) STRICT;
-      CREATE TABLE IF NOT EXISTS artifacts (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, filename TEXT NOT NULL) STRICT;`);
+      CREATE TABLE IF NOT EXISTS artifacts (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, filename TEXT NOT NULL) STRICT;
+      CREATE TABLE IF NOT EXISTS worker_lock (id INTEGER PRIMARY KEY CHECK(id = 1), token TEXT NOT NULL, pid INTEGER NOT NULL) STRICT;`);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const lock = this.db.prepare('SELECT pid FROM worker_lock WHERE id = 1').get();
+      if (lock) {
+        let alive = true;
+        try { process.kill(Number(lock.pid), 0); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') alive = false; }
+        if (alive) throw new Error('Another workbench owns this database; stop it or use a different AW_DATA_DIR');
+      }
+      this.db.prepare('INSERT OR REPLACE INTO worker_lock VALUES (1, ?, ?)').run(this.workerToken, process.pid);
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); this.db.close(); throw error; }
   }
   list(ownerId?: string): Suite[] {
     const rows = ownerId === undefined ? this.db.prepare('SELECT document FROM suites ORDER BY rowid DESC').all() :
@@ -46,5 +61,8 @@ export class SuiteStore {
   artifact(id: string, ownerId: string): string | undefined {
     return this.db.prepare('SELECT filename FROM artifacts WHERE id = ? AND owner_id = ?').get(id, ownerId)?.filename as string | undefined;
   }
-  close(): void { this.db.close(); }
+  close(): void {
+    this.db.prepare('DELETE FROM worker_lock WHERE token = ?').run(this.workerToken);
+    this.db.close();
+  }
 }
