@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ExecutionStore } from '../../packages/runner/store.ts';
@@ -6,6 +6,9 @@ import { Runner } from '../../packages/runner/runner.ts';
 import { Budget } from '../../packages/runner/budget.ts';
 import { scenarios } from '../support/fixtures.ts';
 import type { Harness, Scenario } from '../support/contracts.ts';
+import { Workbench } from '../../apps/server/workbench.ts';
+import { buildApp } from '../../apps/server/app.ts';
+import { parseScenario } from '../../packages/contracts/scenario.ts';
 
 function fixtureOptions(scenario: Scenario) {
   return {
@@ -18,12 +21,57 @@ function fixtureOptions(scenario: Scenario) {
 export async function createHarness(): Promise<Harness> {
   let directory: string | undefined;
   let store: ExecutionStore | undefined;
+  let api: Awaited<ReturnType<typeof buildApp>> | undefined;
+  let ownerSession: ReturnType<Awaited<ReturnType<typeof buildApp>>['sessions']['create']>;
+  let otherSession: typeof ownerSession;
   async function setup() {
     directory ??= await mkdtemp(join(tmpdir(), 'aw-runner-'));
     store ??= new ExecutionStore(join(directory, 'executions.sqlite'));
     return new Runner(store);
   }
+  async function setupApi() {
+    if (api) return api;
+    directory ??= await mkdtemp(join(tmpdir(), 'aw-runner-'));
+    const catalog = scenarios.map(parseScenario);
+    const happy = catalog.find(s => s.id === 'RF-001')!;
+    happy.messages.push('owned-trace-canary', 'Authorization: Bearer aw-test-secret-do-not-export');
+    const service = await Workbench.open(join(directory, 'api.sqlite'), catalog, ['aw-test-secret-do-not-export']);
+    const config = { scenarioPack: 'refunds-v1' as const, agentId: 'fixture-safe' as const,
+      repeats: 1, scenarioIds: ['RF-001'], fixtureJudges: true };
+    const seed = service.enqueue('local-owner', config);
+    await service.idle();
+    const completed = service.suites.get(seed.id, 'local-owner')!;
+    service.suites.save({ ...completed, id: 'owner-suite' });
+    service.suites.save({ ...completed, id: 'other-suite', ownerId: 'other-owner', scenarios: [{ ...happy, messages: ['other-workspace-canary'] }] });
+    const root = join(directory, 'artifacts');
+    const outside = join(directory, 'outside');
+    await mkdir(root); await mkdir(outside);
+    await writeFile(join(root, 'owned.txt'), 'owned-artifact-canary');
+    await writeFile(join(outside, 'secret.txt'), 'outside-artifact-canary');
+    await symlink(outside, join(root, 'outside-link'), 'junction');
+    service.suites.addArtifact('owned-artifact', 'local-owner', 'owned.txt');
+    service.suites.addArtifact('outside-symlink', 'local-owner', 'outside-link/secret.txt');
+    api = await buildApp({ workbench: service, artifactRoot: root });
+    ownerSession = api.sessions.create('local-owner');
+    otherSession = api.sessions.create('other-owner');
+    return api;
+  }
   return {
+    api: {
+      async request(input) {
+        const { app, service } = await setupApi();
+        const session = input.session === 'owner' ? ownerSession : input.session === 'other' ? otherSession : undefined;
+        const headers: Record<string, string> = { host: '127.0.0.1:3000', origin: 'http://127.0.0.1:3000',
+          ...(input.body !== undefined ? { 'content-type': 'application/json' } : {}),
+          ...(session ? { cookie: `aw_session=${session.token}` } : {}),
+          ...(input.csrf && session ? { 'x-aw-csrf': session.csrf } : {}), ...input.headers };
+        const before = service.mutations;
+        const response = await app.inject({ method: input.method as 'GET' | 'POST', url: input.path,
+          headers, payload: input.body === undefined ? undefined : typeof input.body === 'string' ? input.body : JSON.stringify(input.body) });
+        return { status: response.statusCode, headers: Object.fromEntries(Object.entries(response.headers).map(([k, v]) => [k, String(v)])),
+          text: response.body, outbound: [], mutationCount: service.mutations - before };
+      },
+    },
     runner: {
       async run(scenario) {
         return (await setup()).run(scenario, fixtureOptions(scenario));
@@ -75,6 +123,7 @@ export async function createHarness(): Promise<Harness> {
       },
     },
     async dispose() {
+      await api?.app.close();
       store?.close();
       if (directory) await rm(directory, { recursive: true, force: true });
     },
