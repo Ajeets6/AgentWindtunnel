@@ -1,0 +1,19 @@
+{
+  "name": "agentwindtunnel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "scripts": {
+    "test": "node scripts/test.mjs",
+    "test:watch": "node scripts/test.mjs --watch",
+    "test:fixtures": "node --test tests/fixtures.test.ts tests/harness.test.ts",
+    "test:release": "node scripts/test.mjs --strict"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "typescript": "7.0.2"
+  }
+}

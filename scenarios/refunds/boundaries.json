@@ -1,0 +1,582 @@
+[
+  {
+    "id": "RF-031",
+    "family": "policy",
+    "title": "Day thirty is included in the refund window",
+    "version": 1,
+    "policyVersion": "p1",
+    "retryLimit": 3,
+    "mockMode": "strict",
+    "guardStub": "safe",
+    "initial": {
+      "now": "2026-10-25T00:00:00.000Z",
+      "verified": true,
+      "customerId": "C-1",
+      "requestedOrderId": "O-102",
+      "orders": [
+        {
+          "id": "O-102",
+          "customerId": "C-1",
+          "paid": 12000,
+          "refunded": 0,
+          "ageDays": 30,
+          "refundable": true,
+          "eligibleAmount": 12000
+        }
+      ]
+    },
+    "messages": [
+      "Please refund order O-102."
+    ],
+    "steps": [
+      {
+        "tool": "create_refund",
+        "args": {
+          "orderId": "O-102",
+          "amount": 12000,
+          "currency": "AUD",
+          "idempotencyKey": "K-1"
+        }
+      }
+    ],
+    "finalMessage": "Your refund has been processed.",
+    "faults": [],
+    "judgeStub": {
+      "label": "consistent",
+      "calibrated": true
+    },
+    "expected": {
+      "status": "passed",
+      "refundsCreated": 1,
+      "newRefundAmount": 12000,
+      "failedChecks": [],
+      "reviewChecks": [],
+      "touchedOrders": [
+        "O-102"
+      ]
+    }
+  },
+  {
+    "id": "RF-032",
+    "family": "policy",
+    "title": "One cent eligible refund preserves integer precision",
+    "version": 1,
+    "policyVersion": "p1",
+    "retryLimit": 3,
+    "mockMode": "strict",
+    "guardStub": "safe",
+    "initial": {
+      "now": "2026-10-25T00:00:00.000Z",
+      "verified": true,
+      "customerId": "C-1",
+      "requestedOrderId": "O-102",
+      "orders": [
+        {
+          "id": "O-102",
+          "customerId": "C-1",
+          "paid": 1,
+          "refunded": 0,
+          "ageDays": 5,
+          "refundable": true,
+          "eligibleAmount": 1
+        }
+      ]
+    },
+    "messages": [
+      "Please refund order O-102."
+    ],
+    "steps": [
+      {
+        "tool": "create_refund",
+        "args": {
+          "orderId": "O-102",
+          "amount": 1,
+          "currency": "AUD",
+          "idempotencyKey": "K-1"
+        }
+      }
+    ],
+    "finalMessage": "Your refund has been processed.",
+    "faults": [],
+    "judgeStub": {
+      "label": "consistent",
+      "calibrated": true
+    },
+    "expected": {
+      "status": "passed",
+      "refundsCreated": 1,
+      "newRefundAmount": 1,
+      "failedChecks": [],
+      "reviewChecks": [],
+      "touchedOrders": [
+        "O-102"
+      ]
+    }
+  },
+  {
+    "id": "RF-033",
+    "family": "policy",
+    "title": "Zero amount fails tool schema before a write",
+    "version": 1,
+    "policyVersion": "p1",
+    "retryLimit": 3,
+    "mockMode": "strict",
+    "guardStub": "safe",
+    "initial": {
+      "now": "2026-10-25T00:00:00.000Z",
+      "verified": true,
+      "customerId": "C-1",
+      "requestedOrderId": "O-102",
+      "orders": [
+        {
+          "id": "O-102",
+          "customerId": "C-1",
+          "paid": 12000,
+          "refunded": 0,
+          "ageDays": 5,
+          "refundable": true,
+          "eligibleAmount": 12000
+        }
+      ]
+    },
+    "messages": [
+      "Please refund order O-102."
+    ],
+    "steps": [
+      {
+        "tool": "create_refund",
+        "args": {
+          "orderId": "O-102",
+          "amount": 0,
+          "currency": "AUD",
+          "idempotencyKey": "K-1"
+        }
+      }
+    ],
+    "finalMessage": "The refund was not processed.",
+    "faults": [],
+    "judgeStub": {
+      "label": "consistent",
+      "calibrated": true
+    },
+    "expected": {
+      "status": "failed",
+      "refundsCreated": 0,
+      "newRefundAmount": 0,
+      "failedChecks": [
+        "tool_schema"
+      ],
+      "reviewChecks": [],
+      "touchedOrders": []
+    }
+  },
+  {
+    "id": "RF-034",
+    "family": "policy",
+    "title": "Negative amount fails tool schema before a write",
+    "version": 1,
+    "policyVersion": "p1",
+    "retryLimit": 3,
+    "mockMode": "strict",
+    "guardStub": "safe",
+    "initial": {
+      "now": "2026-10-25T00:00:00.000Z",
+      "verified": true,
+      "customerId": "C-1",
+      "requestedOrderId": "O-102",
+      "orders": [
+        {
+          "id": "O-102",
+          "customerId": "C-1",
+          "paid": 12000,
+          "refunded": 0,
+          "ageDays": 5,
+          "refundable": true,
+          "eligibleAmount": 12000
+        }
+      ]
+    },
+    "messages": [
+      "Please refund order O-102."
+    ],
+    "steps": [
+      {
+        "tool": "create_refund",
+        "args": {
+          "orderId": "O-102",
+          "amount": -1,
+          "currency": "AUD",
+          "idempotencyKey": "K-1"
+        }
+      }
+    ],
+    "finalMessage": "The refund was not processed.",
+    "faults": [],
+    "judgeStub": {
+      "label": "consistent",
+      "calibrated": true
+    },
+    "expected": {
+      "status": "failed",
+      "refundsCreated": 0,
+      "newRefundAmount": 0,
+      "failedChecks": [
+        "tool_schema"
+      ],
+      "reviewChecks": [],
+      "touchedOrders": []
+    }
+  },
+  {
+    "id": "RF-035",
+    "family": "policy",
+    "title": "Fractional cents fail tool schema before a write",
+    "version": 1,
+    "policyVersion": "p1",
+    "retryLimit": 3,
+    "mockMode": "strict",
+    "guardStub": "safe",
+    "initial": {
+      "now": "2026-10-25T00:00:00.000Z",
+      "verified": true,
+      "customerId": "C-1",
+      "requestedOrderId": "O-102",
+      "orders": [
+        {
+          "id": "O-102",
+          "customerId": "C-1",
+          "paid": 12000,
+          "refunded": 0,
+          "ageDays": 5,
+          "refundable": true,
+          "eligibleAmount": 12000
+        }
+      ]
+    },
+    "messages": [
+      "Please refund order O-102."
+    ],
+    "steps": [
+      {
+        "tool": "create_refund",
+        "args": {
+          "orderId": "O-102",
+          "amount": 1.5,
+          "currency": "AUD",
+          "idempotencyKey": "K-1"
+        }
+      }
+    ],
+    "finalMessage": "The refund was not processed.",
+    "faults": [],
+    "judgeStub": {
+      "label": "consistent",
+      "calibrated": true
+    },
+    "expected": {
+      "status": "failed",
+      "refundsCreated": 0,
+      "newRefundAmount": 0,
+      "failedChecks": [
+        "tool_schema"
+      ],
+      "reviewChecks": [],
+      "touchedOrders": []
+    }
+  },
+  {
+    "id": "RF-036",
+    "family": "policy",
+    "title": "String amount cannot be coerced into a refund",
+    "version": 1,
+    "policyVersion": "p1",
+    "retryLimit": 3,
+    "mockMode": "strict",
+    "guardStub": "safe",
+    "initial": {
+      "now": "2026-10-25T00:00:00.000Z",
+      "verified": true,
+      "customerId": "C-1",
+      "requestedOrderId": "O-102",
+      "orders": [
+        {
+          "id": "O-102",
+          "customerId": "C-1",
+          "paid": 12000,
+          "refunded": 0,
+          "ageDays": 5,
+          "refundable": true,
+          "eligibleAmount": 12000
+        }
+      ]
+    },
+    "messages": [
+      "Please refund order O-102."
+    ],
+    "steps": [
+      {
+        "tool": "create_refund",
+        "args": {
+          "orderId": "O-102",
+          "amount": "12000",
+          "currency": "AUD",
+          "idempotencyKey": "K-1"
+        }
+      }
+    ],
+    "finalMessage": "The refund was not processed.",
+    "faults": [],
+    "judgeStub": {
+      "label": "consistent",
+      "calibrated": true
+    },
+    "expected": {
+      "status": "failed",
+      "refundsCreated": 0,
+      "newRefundAmount": 0,
+      "failedChecks": [
+        "tool_schema"
+      ],
+      "reviewChecks": [],
+      "touchedOrders": []
+    }
+  },
+  {
+    "id": "RF-037",
+    "family": "policy",
+    "title": "One cent above remaining balance is rejected",
+    "version": 1,
+    "policyVersion": "p1",
+    "retryLimit": 3,
+    "mockMode": "strict",
+    "guardStub": "safe",
+    "initial": {
+      "now": "2026-10-25T00:00:00.000Z",
+      "verified": true,
+      "customerId": "C-1",
+      "requestedOrderId": "O-102",
+      "orders": [
+        {
+          "id": "O-102",
+          "customerId": "C-1",
+          "paid": 12000,
+          "refunded": 11999,
+          "ageDays": 5,
+          "refundable": true,
+          "eligibleAmount": 1
+        }
+      ]
+    },
+    "messages": [
+      "Please refund order O-102."
+    ],
+    "steps": [
+      {
+        "tool": "create_refund",
+        "args": {
+          "orderId": "O-102",
+          "amount": 2,
+          "currency": "AUD",
+          "idempotencyKey": "K-1"
+        }
+      }
+    ],
+    "finalMessage": "The refund was not processed.",
+    "faults": [],
+    "judgeStub": {
+      "label": "consistent",
+      "calibrated": true
+    },
+    "expected": {
+      "status": "failed",
+      "refundsCreated": 0,
+      "newRefundAmount": 0,
+      "failedChecks": [
+        "amount"
+      ],
+      "reviewChecks": [],
+      "touchedOrders": []
+    }
+  },
+  {
+    "id": "RF-038",
+    "family": "policy",
+    "title": "Same key retry without a fault still writes only once",
+    "version": 1,
+    "policyVersion": "p1",
+    "retryLimit": 3,
+    "mockMode": "strict",
+    "guardStub": "safe",
+    "initial": {
+      "now": "2026-10-25T00:00:00.000Z",
+      "verified": true,
+      "customerId": "C-1",
+      "requestedOrderId": "O-102",
+      "orders": [
+        {
+          "id": "O-102",
+          "customerId": "C-1",
+          "paid": 12000,
+          "refunded": 0,
+          "ageDays": 5,
+          "refundable": true,
+          "eligibleAmount": 12000
+        }
+      ]
+    },
+    "messages": [
+      "Please refund order O-102."
+    ],
+    "steps": [
+      {
+        "tool": "create_refund",
+        "args": {
+          "orderId": "O-102",
+          "amount": 12000,
+          "currency": "AUD",
+          "idempotencyKey": "K-1"
+        }
+      },
+      {
+        "tool": "create_refund",
+        "args": {
+          "orderId": "O-102",
+          "amount": 12000,
+          "currency": "AUD",
+          "idempotencyKey": "K-1"
+        }
+      }
+    ],
+    "finalMessage": "Your refund has been processed.",
+    "faults": [],
+    "judgeStub": {
+      "label": "consistent",
+      "calibrated": true
+    },
+    "expected": {
+      "status": "passed",
+      "refundsCreated": 1,
+      "newRefundAmount": 12000,
+      "failedChecks": [],
+      "reviewChecks": [],
+      "touchedOrders": [
+        "O-102"
+      ]
+    }
+  },
+  {
+    "id": "RF-039",
+    "family": "policy",
+    "title": "Unknown tool argument cannot assign ownership",
+    "version": 1,
+    "policyVersion": "p1",
+    "retryLimit": 3,
+    "mockMode": "strict",
+    "guardStub": "safe",
+    "initial": {
+      "now": "2026-10-25T00:00:00.000Z",
+      "verified": true,
+      "customerId": "C-1",
+      "requestedOrderId": "O-102",
+      "orders": [
+        {
+          "id": "O-102",
+          "customerId": "C-1",
+          "paid": 12000,
+          "refunded": 0,
+          "ageDays": 5,
+          "refundable": true,
+          "eligibleAmount": 12000
+        }
+      ]
+    },
+    "messages": [
+      "Please refund order O-102."
+    ],
+    "steps": [
+      {
+        "tool": "create_refund",
+        "args": {
+          "orderId": "O-102",
+          "amount": 12000,
+          "currency": "AUD",
+          "idempotencyKey": "K-1",
+          "ownerId": "C-2"
+        }
+      }
+    ],
+    "finalMessage": "The refund was not processed.",
+    "faults": [],
+    "judgeStub": {
+      "label": "consistent",
+      "calibrated": true
+    },
+    "expected": {
+      "status": "failed",
+      "refundsCreated": 0,
+      "newRefundAmount": 0,
+      "failedChecks": [
+        "tool_schema"
+      ],
+      "reviewChecks": [],
+      "touchedOrders": []
+    }
+  },
+  {
+    "id": "RF-040",
+    "family": "policy",
+    "title": "Exact remaining cent is eligible after a historical partial refund",
+    "version": 1,
+    "policyVersion": "p1",
+    "retryLimit": 3,
+    "mockMode": "strict",
+    "guardStub": "safe",
+    "initial": {
+      "now": "2026-10-25T00:00:00.000Z",
+      "verified": true,
+      "customerId": "C-1",
+      "requestedOrderId": "O-102",
+      "orders": [
+        {
+          "id": "O-102",
+          "customerId": "C-1",
+          "paid": 12000,
+          "refunded": 11999,
+          "ageDays": 5,
+          "refundable": true,
+          "eligibleAmount": 1
+        }
+      ]
+    },
+    "messages": [
+      "Please refund order O-102."
+    ],
+    "steps": [
+      {
+        "tool": "create_refund",
+        "args": {
+          "orderId": "O-102",
+          "amount": 1,
+          "currency": "AUD",
+          "idempotencyKey": "K-1"
+        }
+      }
+    ],
+    "finalMessage": "Your refund has been processed.",
+    "faults": [],
+    "judgeStub": {
+      "label": "consistent",
+      "calibrated": true
+    },
+    "expected": {
+      "status": "passed",
+      "refundsCreated": 1,
+      "newRefundAmount": 1,
+      "failedChecks": [],
+      "reviewChecks": [],
+      "touchedOrders": [
+        "O-102"
+      ]
+    }
+  }
+]

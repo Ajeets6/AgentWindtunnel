@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local application state, dependencies, test reports and secrets
+node_modules/
+data/
+coverage/
+test-results/
+playwright-report/
+.env
+.env.*
+!.env.example
+*.log
