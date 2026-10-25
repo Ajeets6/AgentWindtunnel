@@ -21,4 +21,4 @@ export type ExecutionView = Suite['executions'][number] & {
   events: Event[]; checks: Check[]; messages: string[]; finalMessage: string;
   reviews?: Review[]; adjudicatedStatus?: RunResult['status'];
 };
-export type SuiteDetail = Omit<Suite, 'executions'> & { executions: ExecutionView[] };
+export type SuiteDetail = Omit<Suite, 'executions'> & { executions: ExecutionView[]; spending?: { reservedMicros: number; spentMicros: number; calls: number } };

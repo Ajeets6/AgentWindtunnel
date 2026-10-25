@@ -53,8 +53,9 @@ export function Inspector({ execution, onClose }: { execution: ExecutionView; on
           <span className="mono">{check.id}</span><Outcome status={check.status} /></button>)}</div>
         <div className="panel-note"><span className="event-label">JUDGMENT SOURCE</span><p>{execution.result?.judgmentSource === 'fixture-stubs'
           ? 'Synthetic fixture answers. No model was called. These results do not measure model accuracy.'
-          : 'No inference provider is connected. Required semantic judgments remain in review.'}</p>
+          : execution.result?.judgmentSource === 'injected-provider' ? 'Provider diagnostics are available in the timeline. Uncalibrated judgments remain human-gated.' : 'No semantic provider supplied a verified judgment. Required semantics remain in review.'}</p>
           {highlight && <p>Highlighted tool events and refund rows supply the backend evidence. Attempted violations can fail even when a write was blocked.</p>}</div>
+        {execution.reviews?.map(review => <div className="panel-note" key={review.id}><span className="event-label">HUMAN REVIEW · {review.checkId}</span><p>{review.status}: {review.note}</p><p>{new Date(review.createdAt).toLocaleString()}</p></div>)}
       </section>
       <section id="panel-state" role="tabpanel" aria-labelledby="tab-state" className={`inspect-panel state-panel ${tab === 'state' ? 'active' : ''}`}>
         <h3>Before → after <span>AUD cents</span></h3>
