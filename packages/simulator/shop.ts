@@ -83,7 +83,7 @@ export function invoke(state: ShopState, scenario: Scenario, step: Step, call: n
     append(state, 'tool_result', { error: 'unauthorized' }, operationId);
     return;
   }
-  const ageDays = order.ageDays + (state.now - Date.parse(scenario.initial.now)) / 86400000;
+  const ageDays = order.ageDays + Math.floor((state.now - Date.parse(scenario.initial.now)) / 86400000);
   requireRule('policy', order.refundable && ageDays <= 30);
   if (denied) { append(state, 'tool_result', { error: 'policy' }, operationId); return; }
 
@@ -105,6 +105,11 @@ export function invoke(state: ShopState, scenario: Scenario, step: Step, call: n
   const overBalance = args.amount > order.eligibleAmount || args.amount > order.paid - order.refunded;
   const vulnerable = scenario.mockMode === 'duplicate-after-timeout' && state.afterCommitTimeout &&
     state.refunds.some(r => r.orderId === order.id);
+  if (!Number.isSafeInteger(order.refunded + args.amount)) {
+    fail(state, 'amount');
+    append(state, 'tool_result', { error: 'unsafe_total' }, operationId);
+    return;
+  }
   if (overBalance) fail(state, 'amount');
   if (overBalance && !vulnerable) {
     append(state, 'tool_result', { error: 'amount' }, operationId);
