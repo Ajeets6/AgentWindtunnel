@@ -10,6 +10,11 @@ import { Workbench } from '../../apps/server/workbench.ts';
 import { buildApp } from '../../apps/server/app.ts';
 import { parseScenario } from '../../packages/contracts/scenario.ts';
 import { openBrowserWorkspace } from '../support/browser.ts';
+import { approveEndpoint } from '../../packages/providers/egress.ts';
+import { ControlledTransport } from '../../packages/providers/transport.ts';
+import { SystemOneClient, buildEvidence, cacheKey, normalizeAnswer } from '../../packages/providers/systemone.ts';
+import type { Question } from '../../packages/providers/systemone.ts';
+import { IsolationBoundary } from '../../packages/security/isolation.ts';
 
 function browserCapability(): Pick<Harness, 'web'> {
   return {
@@ -115,6 +120,41 @@ export async function createHarness(): Promise<Harness> {
       },
     },
     ...browserCapability(),
+    egress: { async check(input) { return { allowed: approveEndpoint(input), outbound: [] }; } },
+    decisions: {
+      async normalize(_provider, question, answer) { return normalizeAnswer(question as Question, answer); },
+      async buildEvidence(input) { return buildEvidence(input.trusted as Record<string, unknown>, input.untrusted as Record<string, unknown>); },
+      async cacheKeys(changes) {
+        const trusted = { provider: 'laya', modelRevision: 'pinned', rubricVersion: 'v1', tokenizerRevision: 'v1',
+          policyVersion: 'p1', guardVersion: 'v1', evidence: 'evidence', settings: {}, workspaceId: 'test', executionId: 'execution' };
+        return changes.map(change => cacheKey({ ...trusted, ...change }));
+      },
+      async evaluate(input) {
+        const model = input.provider === 'laya' ? 'laya-typed-decisions' : 'jev-pinned-test';
+        const transport = new ControlledTransport(async () => { if (input.error !== undefined) throw new Error(String(input.error)); return input.response; });
+        const client = new SystemOneClient({ provider: input.provider, model, modelRevision: model,
+          baseUrl: input.provider === 'laya' ? 'http://127.0.0.1:8000' : 'https://api.typesafe.ai',
+          networkMode: input.networkMode ?? 'local', cloudAllowed: input.cloudAllowed ?? false, calibrated: input.calibrated ?? false,
+          contextLimit: input.contextLimit ?? 1024, workspaceId: 'test', executionId: 'execution', tokenizerRevision: 'test',
+          rubricVersion: 'test', policyVersion: 'p1', guardVersion: 'test' }, transport.send, async () => input.inputTokens ?? 0);
+        const result = await client.evaluate({ evidence: input.evidence ?? '', complete: input.complete ?? false, critical: input.critical,
+          deterministicFailure: input.deterministicFailure, purpose: input.purpose });
+        return { ...result, outbound: [], ...(transport.requests[0] ? { request: { url: transport.requests[0].url, body: transport.requests[0].body as Record<string, unknown> } } : { request: undefined }) };
+      },
+    },
+    security: {
+      async exercise(input) {
+        const boundary = new IsolationBoundary(async () => input.detector);
+        const before = boundary.snapshot();
+        const record = await boundary.ingest(input.attack.payload, input.attack.surface, input.mode);
+        for (const operation of ['shell', 'arbitrary_http', 'read_secret', 'change_policy', 'enable_cloud']) boundary.authorizeHostOperation(operation);
+        const after = boundary.snapshot();
+        return { hostMutations: JSON.stringify(before) === JSON.stringify(after) ? 0 : 1,
+          arbitraryToolExecuted: boundary.deniedOperations.length !== 5, secretsExposed: [], outbound: [],
+          rawPayload: record.rawPayload, trustedPolicyVersion: after.policyVersion, guardCalls: record.guardCalls,
+          reviewRequired: record.reviewRequired };
+      },
+    },
     runner: {
       async run(scenario) {
         return (await setup()).run(scenario, fixtureOptions(scenario));

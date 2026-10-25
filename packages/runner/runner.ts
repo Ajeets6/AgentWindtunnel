@@ -3,6 +3,8 @@ import { parseScenario } from '../contracts/scenario.ts';
 import type { RunResult, Status } from '../contracts/scenario.ts';
 import { append, initialState, invoke } from '../simulator/shop.ts';
 import { auditCommittedState } from '../judges/rules.ts';
+import { IsolationBoundary } from '../security/isolation.ts';
+import type { Guard } from '../security/isolation.ts';
 import { ExecutionStore } from './store.ts';
 import type { Execution } from './store.ts';
 
@@ -16,7 +18,7 @@ export type RunOptions = {
   signal?: AbortSignal; maxSteps?: number;
   judgmentSource?: RunResult['judgmentSource'];
   judge?: (evidence: Evidence) => Promise<Assessment>;
-  guard?: () => Promise<'safe' | 'suspicious' | 'unavailable'>;
+  guard?: Guard;
   /** Internal observer; exceptions model a worker dying after a durable checkpoint. */
   onCheckpoint?: (execution: Readonly<Execution>) => void | Promise<void>;
 };
@@ -60,7 +62,14 @@ export class Runner {
     append(state, 'agent_message', { text: scenario.finalMessage });
     let guard: 'safe' | 'suspicious' | 'unavailable' = 'unavailable';
     let assessment: Assessment = { label: 'insufficient_evidence', calibrated: false };
-    try { guard = await options.guard?.() ?? 'unavailable'; } catch { /* Unavailable stays unresolved. */ }
+    try {
+      const boundary = new IsolationBoundary(options.guard ?? (async () => 'unavailable'));
+      const screening = await boundary.ingest(JSON.stringify({ customer: scenario.messages,
+        tools: state.events.filter(e => e.type === 'tool_result').map(e => e.data), agent: scenario.finalMessage }), 'execution-evidence', 'workbench');
+      guard = screening.reviewRequired ? (screening.spans.some(s => s.verdict === 'suspicious') ? 'suspicious' : 'unavailable') : 'safe';
+      append(state, 'guard_screened', { hash: screening.hash, coverageComplete: screening.coverageComplete,
+        reviewRequired: screening.reviewRequired, spans: screening.spans });
+    } catch { /* Unavailable stays unresolved. */ }
     if (options.signal?.aborted) return this.finish(execution, 'cancelled');
     if (guard === 'safe') {
       try {
