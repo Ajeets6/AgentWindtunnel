@@ -9,6 +9,13 @@ import { SuiteStore } from './store.ts';
 import { redact } from './security.ts';
 import type { Scenario } from '../../packages/contracts/scenario.ts';
 import type { Suite, SuiteConfig } from '../../packages/contracts/api.ts';
+import { parseScenario } from '../../packages/contracts/scenario.ts';
+import type { ProviderConfig, Review } from '../../packages/contracts/providers.ts';
+import { providerSchema } from '../../packages/contracts/providers.ts';
+import { decisionClient } from '../../packages/providers/runtime.ts';
+import { providerTransport } from '../../packages/providers/runtime.ts';
+import { ChatAgent } from '../../packages/providers/chat.ts';
+import type { Status } from '../../packages/contracts/scenario.ts';
 
 export class Workbench {
   readonly suites: SuiteStore;
@@ -34,6 +41,41 @@ export class Workbench {
     return new Workbench(path, catalog, secrets);
   }
   get mutations() { return this.mutationCounter; }
+  scenarios(ownerId: string): Scenario[] { return [...this.catalog, ...this.suites.documents<Scenario>(ownerId, 'scenario')]; }
+  duplicateScenario(ownerId: string, sourceId: string, edits: { title: string; messages: string[]; finalMessage: string; steps?: Scenario['steps'] }): Scenario {
+    const source = this.scenarios(ownerId).find(s => s.id === sourceId);
+    if (!source) throw Object.assign(new Error('Not found'), { statusCode: 404 });
+    const scenario = parseScenario({ ...source, ...edits, id: 'SC-' + randomUUID(), version: source.version + 1 });
+    this.suites.put(ownerId, 'scenario', scenario.id, redact(scenario, this.secrets));
+    this.mutationCounter++;
+    return scenario;
+  }
+  providers(ownerId: string): ProviderConfig[] { return this.suites.documents(ownerId, 'provider'); }
+  configureProvider(ownerId: string, input: unknown): ProviderConfig {
+    const config = providerSchema.parse(input);
+    this.suites.put(ownerId, 'provider', config.id, config);
+    this.mutationCounter++; return config;
+  }
+  review(ownerId: string, executionId: string, input: Pick<Review, 'checkId' | 'status' | 'note'>): Review {
+    const suite = this.suites.list(ownerId).find(s => s.executions.some(e => e.id === executionId));
+    if (!suite) throw Object.assign(new Error('Not found'), { statusCode: 404 });
+    const execution = this.executions.load(executionId);
+    if (!execution.result || !['message_truth', 'injection'].includes(input.checkId)) throw Object.assign(new Error('Not reviewable'), { statusCode: 400 });
+    const review: Review = { ...input, id: randomUUID(), executionId, reviewer: ownerId, createdAt: new Date().toISOString() };
+    this.suites.put(ownerId, 'review', review.id, redact(review, this.secrets));
+    this.mutationCounter++; return review;
+  }
+  calibration(ownerId: string) {
+    const reviews = this.suites.documents<Review>(ownerId, 'review');
+    const matrix: Record<string, number> = {};
+    for (const review of reviews) {
+      const execution = this.executions.load(review.executionId);
+      const original = execution.result?.checks.find(c => c.id === review.checkId)?.status ?? 'missing';
+      const key = `${execution.result?.judgmentSource ?? 'unknown'}:${review.checkId}:${original}->${review.status}`;
+      matrix[key] = (matrix[key] ?? 0) + 1;
+    }
+    return { reviewed: reviews.length, matrix, automaticAcceptanceEnabled: false, caveat: 'Operational review labels are not a held-out accuracy benchmark.' };
+  }
   private save(suite: Suite, executionId?: string): void {
     suite.cancelRequested ||= this.suites.get(suite.id, suite.ownerId)?.cancelRequested ?? false;
     const event = this.suites.save(redact(suite, this.secrets), executionId);
@@ -43,12 +85,15 @@ export class Workbench {
   enqueue(ownerId: string, config: SuiteConfig): Suite {
     if (this.suites.list(ownerId).filter(s => ['queued', 'running'].includes(s.status)).length >= 8)
       throw Object.assign(new Error('Queue is full'), { statusCode: 429 });
-    const scenarios = this.catalog.filter(s => !config.scenarioIds || config.scenarioIds.includes(s.id));
+    const scenarios = this.scenarios(ownerId).filter(s => !config.scenarioIds || config.scenarioIds.includes(s.id));
     if (!scenarios.length || (config.scenarioIds && scenarios.length !== config.scenarioIds.length) || scenarios.length * config.repeats > 400)
       throw Object.assign(new Error('Invalid scenario selection or suite size'), { statusCode: 400 });
     const suite: Suite = { id: randomUUID(), ownerId, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       status: 'queued', config, scenarios: structuredClone(scenarios), executions: [], total: scenarios.length * config.repeats,
-      cancelRequested: false };
+      cancelRequested: false, providers: structuredClone(this.providers(ownerId)) };
+    for (const [id, role] of [[config.agentId === 'fixture-safe' ? undefined : config.agentId, 'agent'], [config.judgeProviderId, 'judge'], [config.guardProviderId, 'injection-guard']] as const)
+      if (id && !suite.providers!.some(p => p.id === id && p.enabled && p.roles.includes(role))) throw Object.assign(new Error('Provider or role unavailable'), { statusCode: 400 });
+    if (config.baselineId && !this.suites.get(config.baselineId, ownerId)) throw Object.assign(new Error('Baseline not found'), { statusCode: 404 });
     this.save(suite);
     this.kick();
     return suite;
@@ -96,8 +141,35 @@ export class Workbench {
         }
         const result = await this.runner.resume(item.id, {
           signal: controller.signal,
+          ...(suite.config.agentId !== 'fixture-safe' ? {
+            agent: async context => {
+              const provider = suite.providers!.find(p => p.id === suite.config.agentId)!;
+              const client = new ChatAgent(provider, providerTransport(provider, this.suites,
+                { suiteId: suite.id, budgetMicros: suite.config.cloudBudgetMicros ?? 0 }, this.secrets));
+              if (!context.history.length) await client.health(controller.signal);
+              return client.next(context);
+            },
+          } : {}),
           ...(suite.config.fixtureJudges ? { judgmentSource: 'fixture-stubs' as const,
             guard: async () => scenario.guardStub, judge: async () => scenario.judgeStub } : {}),
+          ...(!suite.config.fixtureJudges && suite.config.judgeProviderId ? {
+            judge: async evidence => {
+              const provider = suite.providers!.find(p => p.id === suite.config.judgeProviderId)!;
+              if (provider.protocol !== 'systemone') return { label: 'insufficient_evidence' as const, calibrated: false };
+              const client = decisionClient(provider, this.suites, suite.ownerId, { suiteId: suite.id, executionId: item!.id, budgetMicros: suite.config.cloudBudgetMicros ?? 0 }, this.secrets);
+              const result = await client.evaluate({ evidence: JSON.stringify(evidence), complete: true, signal: controller.signal });
+              return { label: result.label === 'consistent' || result.label === 'contradiction' ? result.label : 'insufficient_evidence' as const, calibrated: result.status === 'accepted',
+                diagnostics: { provider: provider.id, modelRevision: provider.modelRevision, reason: result.reason,
+                  probabilities: result.probabilities, outputTokens: result.generatedTokens } };
+            }, judgmentSource: 'injected-provider' as const,
+          } : {}),
+          ...(!suite.config.fixtureJudges && suite.config.guardProviderId ? {
+            guard: async span => {
+              const provider = suite.providers!.find(p => p.id === suite.config.guardProviderId)!;
+              if (provider.protocol !== 'systemone') return 'unavailable' as const;
+              return decisionClient(provider, this.suites, suite.ownerId, { suiteId: suite.id, executionId: item!.id, budgetMicros: suite.config.cloudBudgetMicros ?? 0 }, this.secrets).screen(span.text, controller.signal);
+            },
+          } : {}),
           onCheckpoint: async () => {
             await yieldWorker();
             if (this.suites.get(suite.id, suite.ownerId)?.cancelRequested) controller.abort();
@@ -120,13 +192,17 @@ export class Workbench {
   details(id: string, ownerId: string) {
     const suite = this.suites.get(id, ownerId);
     if (!suite) return undefined;
-    return redact({ ...suite, executions: suite.executions.map(item => {
+    return redact({ ...suite, spending: this.suites.spending(id), executions: suite.executions.map(item => {
       const execution = this.executions.load(item.id);
+      const reviews = this.suites.documents<Review>(ownerId, 'review').filter(r => r.executionId === item.id);
+      const effective = execution.state.checks.map(check => ({ ...check, status: reviews.filter(r => r.checkId === check.id).at(-1)?.status ?? check.status }));
+      const adjudicatedStatus: Status = ['error', 'cancelled', 'running'].includes(item.status) ? (item.status === 'running' ? 'needs_review' : item.status) :
+        effective.some(c => c.required && c.status === 'fail') ? 'failed' : effective.some(c => c.required && c.status !== 'pass') ? 'needs_review' : 'passed';
       return { ...item, title: execution.scenario.title, result: execution.result,
         before: execution.scenario.initial,
         after: { now: new Date(execution.state.now).toISOString(), verified: execution.state.verified, orders: execution.state.orders },
         events: execution.state.events, checks: execution.state.checks,
-        messages: execution.scenario.messages, finalMessage: execution.scenario.finalMessage };
+        messages: execution.scenario.messages, finalMessage: execution.finalMessage ?? execution.scenario.finalMessage, reviews, adjudicatedStatus };
     }) }, this.secrets);
   }
   async close(): Promise<void> {

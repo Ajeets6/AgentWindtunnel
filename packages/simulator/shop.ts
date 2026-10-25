@@ -3,13 +3,17 @@ import { z } from 'zod';
 import type { Check, Event, Refund, Scenario, Step } from '../contracts/scenario.ts';
 
 const identifier = z.string().min(1).max(256);
-const schemas = {
+export const toolSchemas = {
+  lookup_order: z.strictObject({ orderId: identifier }),
+  get_refund_policy: z.strictObject({}),
+  request_verification: z.strictObject({}),
   create_refund: z.strictObject({ orderId: identifier, amount: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     currency: z.literal('AUD'), idempotencyKey: identifier }),
   get_refund_status: z.strictObject({ orderId: identifier }),
   wait: z.strictObject({ milliseconds: z.number().int().min(0).max(86400000) }),
   verify_customer: z.strictObject({ code: identifier }),
 };
+const schemas = toolSchemas;
 const businessChecks = ['identity', 'ownership', 'policy', 'amount', 'duplicate', 'target_order', 'tool_schema', 'retry_limit'];
 export type ShopState = {
   now: number; verified: boolean; orders: Scenario['initial']['orders']; refunds: Refund[];
@@ -51,6 +55,15 @@ export function invoke(state: ShopState, scenario: Scenario, step: Step, call: n
     append(state, 'tool_result', { error: 'invalid_arguments' }, operationId);
     return;
   }
+  if (step.tool === 'get_refund_policy') {
+    append(state, 'tool_result', { version: 'p1', currency: 'AUD', inclusiveDays: 30,
+      identityRequired: true, ownershipRequired: true, currentTargetOrderId: scenario.initial.requestedOrderId }, operationId);
+    return;
+  }
+  if (step.tool === 'request_verification') {
+    append(state, 'tool_result', { challengeId: randomUUID(), status: state.verified ? 'already_verified' : 'awaiting_customer_code' }, operationId);
+    return;
+  }
   if (step.tool === 'wait') {
     state.now += (parsed.data as z.infer<typeof schemas.wait>).milliseconds;
     append(state, 'tool_result', { now: new Date(state.now).toISOString() }, operationId);
@@ -64,7 +77,7 @@ export function invoke(state: ShopState, scenario: Scenario, step: Step, call: n
   const args = parsed.data as z.infer<typeof schemas.create_refund>;
   const order = state.orders.find(o => o.id === args.orderId);
   const fault = scenario.faults.find(f => f.call === call);
-  if (step.tool === 'get_refund_status') {
+  if (step.tool === 'get_refund_status' || step.tool === 'lookup_order') {
     // Stale results affect exposed reads only, never authoritative state.
     const visible = order ? { ...order, identityVerified: state.verified } : { error: 'not_found' };
     if (fault?.kind === 'stale_read') append(state, 'fault', fault, operationId);

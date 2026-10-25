@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { bounded } from '../providers/deadline.ts';
 
 export type Verdict = 'safe' | 'suspicious' | 'unavailable';
-export type Guard = (span: { text: string; source: string; eventId: string; offset: number }) => Promise<Verdict>;
+export type Guard = (span: { text: string; source: string; eventId: string; offset: number; signal?: AbortSignal }) => Promise<Verdict>;
 export type EvidenceRecord = {
   id: string; source: string; rawPayload: string; hash: string; reviewRequired: boolean;
   guardCalls: number; coverageComplete: boolean; spans: { offset: number; verdict: Verdict }[];
@@ -26,12 +27,14 @@ export class IsolationBoundary {
     const id = randomUUID();
     const spans: EvidenceRecord['spans'] = [];
     let offset = 0;
+    const signal = AbortSignal.timeout(10000);
     for (let index = 0; index < 32 && offset < Math.max(1, payload.length); index++) {
       const text = payload.slice(offset, offset + 2048);
       let verdict: Verdict = 'unavailable';
-      try { verdict = await this.guard({ text, source, eventId: id, offset }); } catch { /* Fail closed. */ }
+      try { verdict = await bounded(this.guard({ text, source, eventId: id, offset, signal }), signal); } catch { /* Fail closed. */ }
       if (!['safe', 'suspicious', 'unavailable'].includes(verdict)) verdict = 'unavailable';
       spans.push({ offset, verdict });
+      if (signal.aborted) break;
       if (offset + 2048 >= payload.length) { offset = payload.length; break; }
       offset += 1920;
     }

@@ -58,6 +58,7 @@ export const guardQuestions: Record<string, Question> = {
 export type Evaluation = {
   status: 'accepted' | 'needs_review' | 'rejected'; route: string; runStatus?: 'failed' | 'passed' | 'needs_review';
   generatedTokens: number; label?: string; reason: string;
+  probabilities?: Record<string, number>;
   request?: { url: string; body: Record<string, unknown> };
 };
 export type EvaluationInput = {
@@ -98,9 +99,24 @@ export class SystemOneClient {
       const answer = normalized.message_truth;
       const sorted = Object.values(answer.probabilities!).sort((a, b) => b - a);
       if (!this.config.calibrated || input.critical || sorted[0] < 0.9 || sorted[0] - sorted[1] < 0.2 || answer.label === 'insufficient_evidence')
-        return review('Uncalibrated, critical, ambiguous, or below probability gates');
+        return { ...review('Uncalibrated, critical, ambiguous, or below probability gates'), label: answer.label, probabilities: answer.probabilities };
       return { status: 'accepted', route: this.config.provider, label: answer.label, reason: 'Validated calibrated rubric and probability gates', generatedTokens,
         runStatus: input.deterministicFailure || answer.label === 'contradiction' ? 'failed' : 'passed', request };
     } catch { return review('Provider error or invalid response'); }
+  }
+  async screen(evidence: string, signal?: AbortSignal): Promise<'safe' | 'suspicious' | 'unavailable'> {
+    if (this.config.provider === 'jev' && (this.config.networkMode !== 'hybrid' || !this.config.cloudAllowed)) return 'unavailable';
+    const body = { model: this.config.model, state: { evidence }, questions: guardQuestions };
+    try {
+      const tokens = await this.preflight(body);
+      if (!Number.isSafeInteger(tokens) || tokens < 0 || tokens > this.config.contextLimit) return 'unavailable';
+      const response = record.parse(await this.send({ url: this.config.baseUrl + '/v1/systemone', body, signal }));
+      if (response.model !== this.config.modelRevision) return 'unavailable';
+      const answers = record.parse(response.answers);
+      if (Object.keys(answers).length !== 2 || !Object.hasOwn(answers, 'override') || !Object.hasOwn(answers, 'exfiltration')) return 'unavailable';
+      const values = Object.entries(guardQuestions).map(([id, question]) => normalizeAnswer(question, answers[id]).value!);
+      if (values.some(value => value >= 0.5)) return 'suspicious';
+      return this.config.calibrated && values.every(value => value <= 0.1) ? 'safe' : 'unavailable';
+    } catch { return 'unavailable'; }
   }
 }

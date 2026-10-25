@@ -7,13 +7,18 @@ import { Workbench } from './workbench.ts';
 import { equal, parseJson, redact, Sessions, token } from './security.ts';
 import { junit, report } from '../../packages/cli/report.ts';
 import type { SuiteEvent } from '../../packages/contracts/api.ts';
+import { providerSchema } from '../../packages/contracts/providers.ts';
+import { ChatAgent } from '../../packages/providers/chat.ts';
+import { providerTransport } from '../../packages/providers/runtime.ts';
 
 const identifier = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/;
 const suiteInput = z.strictObject({
-  scenarioPack: z.literal('refunds-v1'), agentId: z.literal('fixture-safe'),
+  scenarioPack: z.literal('refunds-v1'), agentId: z.string().regex(identifier),
   repeats: z.number().int().min(1).max(10),
   scenarioIds: z.array(z.string().regex(identifier)).min(1).max(40).refine(a => new Set(a).size === a.length).optional(),
   fixtureJudges: z.boolean().default(false),
+  judgeProviderId: z.string().regex(identifier).optional(), guardProviderId: z.string().regex(identifier).optional(),
+  cloudBudgetMicros: z.number().int().min(0).max(10000000).default(0), baselineId: z.string().regex(identifier).optional(),
 });
 const csp = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
@@ -82,12 +87,49 @@ export async function buildApp(options: {
     reply.header('Set-Cookie', 'aw_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
     return { ok: true };
   });
-  app.get('/api/scenarios', async () => ({ scenarios: service.catalog }));
-  app.post('/api/scenarios', async (_request, reply) => reply.code(400).send({ error: 'Scenario import is not enabled; authored packs are read-only' }));
-  app.get('/api/agents', async () => ({ agents: [{ id: 'fixture-safe', name: 'Authored fixture agent', kind: 'scripted',
-    description: 'Replays each scenario’s authored actions, including deliberate mistakes. No model requests.' }] }));
-  app.get('/api/settings', async () => ({ networkMode: 'local', providersEnabled: false,
-    semanticJudging: 'Unverified review by default; synthetic fixture judgments are explicitly opt-in.' }));
+  app.get('/api/scenarios', async request => ({ scenarios: service.scenarios(request.session!.ownerId) }));
+  app.post('/api/scenarios', async (request, reply) => {
+    const input = z.strictObject({ sourceId: z.string().regex(identifier), title: z.string().min(6).max(200),
+      messages: z.array(z.string().max(65536)).min(1).max(100), finalMessage: z.string().max(65536),
+      steps: z.array(z.strictObject({ tool: z.string().max(100), args: z.record(z.string(), z.unknown()) })).max(128).optional() }).safeParse(request.body);
+    if (!input.success) return reply.code(400).send({ error: 'Only explicit scenario copies are accepted; control metadata cannot be imported' });
+    const { sourceId, ...edits } = input.data;
+    return reply.code(201).send(service.duplicateScenario(request.session!.ownerId, sourceId, edits));
+  });
+  app.get('/api/agents', async request => ({ agents: [{ id: 'fixture-safe', name: 'Authored fixture agent', kind: 'scripted',
+    description: 'Replays authored actions, including deliberate mistakes.' }, ...service.providers(request.session!.ownerId).filter(p => p.enabled && p.roles.includes('agent')).map(p => ({ id: p.id, name: p.name, kind: p.protocol, description: p.model }))] }));
+  app.get('/api/settings', async request => ({ providers: service.providers(request.session!.ownerId), semanticJudging: 'Human-gated until held-out calibration is established.' }));
+  app.post('/api/providers', async (request, reply) => {
+    const input = providerSchema.safeParse(request.body);
+    if (!input.success) return reply.code(400).send({ error: input.error.issues.map(i => i.message).join('; ') });
+    return service.configureProvider(request.session!.ownerId, input.data);
+  });
+  app.post('/api/providers/test', async (request, reply) => {
+    const input = z.strictObject({ id: z.string().regex(identifier) }).safeParse(request.body);
+    const provider = input.success ? service.providers(request.session!.ownerId).find(p => p.id === input.data.id && p.enabled) : undefined;
+    if (!provider) return reply.code(400).send({ error: 'Unknown provider' });
+    try {
+      const send = providerTransport(provider, service.suites, { suiteId: 'health-' + request.id, budgetMicros: 0 }, service.secrets);
+      const health = provider.protocol === 'systemone' ? await send({ url: provider.baseUrl + '/health', method: 'GET' }) : await new ChatAgent(provider, send).health();
+      return { ok: true, health, automaticAcceptanceEnabled: false };
+    } catch { return reply.code(422).send({ error: 'Provider probe failed, lacked budget, or did not match the configured model' }); }
+  });
+  app.get('/api/reviews', async request => service.calibration(request.session!.ownerId));
+  app.post<{ Params: { id: string } }>('/api/executions/:id/reviews', async (request, reply) => {
+    const input = z.strictObject({ checkId: z.enum(['message_truth', 'injection']), status: z.enum(['pass', 'fail', 'needs_review']), note: z.string().max(2000) }).safeParse(request.body);
+    if (!input.success || !identifier.test(request.params.id)) return reply.code(400).send({ error: 'Invalid semantic review' });
+    return reply.code(201).send(service.review(request.session!.ownerId, request.params.id, input.data));
+  });
+  app.get<{ Params: { id: string }; Querystring: { baseline?: string } }>('/api/suites/:id/compare', async (request, reply) => {
+    const current = service.details(request.params.id, request.session!.ownerId);
+    const baseline = request.query.baseline && identifier.test(request.query.baseline) ? service.details(request.query.baseline, request.session!.ownerId) : undefined;
+    if (!current || !baseline) return reply.code(404).send({ error: 'Owned baseline and suite required' });
+    return { baselineId: baseline.id, currentId: current.id, pairs: current.executions.map(execution => {
+      const other = baseline.executions.find(e => e.scenarioId === execution.scenarioId && e.repetition === execution.repetition);
+      return { scenarioId: execution.scenarioId, repetition: execution.repetition, previous: other?.adjudicatedStatus ?? null,
+        current: execution.adjudicatedStatus, regression: other?.adjudicatedStatus === 'passed' && execution.adjudicatedStatus !== 'passed' };
+    }) };
+  });
   app.get('/api/suites', async request => ({ suites: service.suites.list(request.session!.ownerId)
     .map(({ scenarios, ...suite }) => ({ ...suite, scenarioCount: scenarios.length })) }));
   app.post('/api/suites', async (request, reply) => {

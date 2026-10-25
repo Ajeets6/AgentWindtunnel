@@ -1,11 +1,16 @@
 import { DatabaseSync } from 'node:sqlite';
 import type { RunResult, Scenario } from '../contracts/scenario.ts';
 import type { ShopState } from '../simulator/shop.ts';
+import type { AgentMessage } from '../providers/chat.ts';
+import type { Step } from '../contracts/scenario.ts';
 
 export type Execution = {
   id: string; revision: number; scenario: Scenario; state: ShopState; cursor: number;
   status: 'running' | RunResult['status']; result?: RunResult;
   judgmentSource?: RunResult['judgmentSource'];
+  agentHistory?: AgentMessage[]; responseItems?: Record<string, unknown>[]; pendingCalls?: (Step & { id: string })[];
+  agentTurns?: number; finalMessage?: string;
+  agentMode?: 'model' | 'scripted';
 };
 
 /** Atomic document checkpoints keep simulated commits, ledger and cursor together. */
