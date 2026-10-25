@@ -60,6 +60,7 @@ export type Event = {
 export type RunResult = {
   status: Status; executionId: string; checks: Check[];
   refunds: Refund[]; events: Event[]; outbound: string[];
+  judgmentSource: 'fixture-stubs' | 'unverified-review' | 'injected-provider';
 };
 
 /** Oracle metadata is excluded before execution; no outcome is read from it. */

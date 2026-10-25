@@ -8,7 +8,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test:runner": "node --test tests/simulator.test.ts tests/runner.test.ts",
+    "test:runner": "node --test tests/simulator.test.ts tests/runner.test.ts tests/runner-integration.test.ts",
+    "simulate": "node packages/cli/main.ts",
     "test": "node scripts/test.mjs",
     "test:watch": "node scripts/test.mjs --watch",
     "test:fixtures": "node --test tests/fixtures.test.ts tests/harness.test.ts",

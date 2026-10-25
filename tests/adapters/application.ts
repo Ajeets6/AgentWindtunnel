@@ -9,6 +9,7 @@ import type { Harness, Scenario } from '../support/contracts.ts';
 
 function fixtureOptions(scenario: Scenario) {
   return {
+    judgmentSource: 'fixture-stubs' as const,
     guard: async () => scenario.guardStub,
     judge: async () => ({ ...scenario.judgeStub, label: scenario.judgeStub.label as 'consistent' | 'contradiction' | 'insufficient_evidence' }),
   };

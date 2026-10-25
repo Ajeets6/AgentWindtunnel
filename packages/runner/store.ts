@@ -5,6 +5,7 @@ import type { ShopState } from '../simulator/shop.ts';
 export type Execution = {
   id: string; revision: number; scenario: Scenario; state: ShopState; cursor: number;
   status: 'running' | RunResult['status']; result?: RunResult;
+  judgmentSource?: RunResult['judgmentSource'];
 };
 
 /** Atomic document checkpoints keep simulated commits, ledger and cursor together. */

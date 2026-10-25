@@ -13,6 +13,7 @@ export type Evidence = {
 };
 export type RunOptions = {
   signal?: AbortSignal; maxSteps?: number;
+  judgmentSource?: RunResult['judgmentSource'];
   judge?: (evidence: Evidence) => Promise<Assessment>;
   guard?: () => Promise<'safe' | 'suspicious' | 'unavailable'>;
   /** Internal observer; exceptions model a worker dying after a durable checkpoint. */
@@ -39,6 +40,7 @@ export class Runner {
   async resume(id: string, options: RunOptions = {}): Promise<RunResult> {
     const execution = this.store.load(id);
     if (execution.result) return structuredClone(execution.result);
+    execution.judgmentSource = options.judgmentSource ?? (options.judge ? 'injected-provider' : 'unverified-review');
     const maxSteps = options.maxSteps ?? 128;
     if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > 1000) throw new Error('Invalid step limit');
     const verificationCode = randomUUID();
@@ -70,7 +72,7 @@ export class Runner {
     }
     if (options.signal?.aborted) return this.finish(execution, 'cancelled');
     state.checks.push({ id: 'injection', required: true, status: guard === 'safe' ? 'pass' : 'needs_review' });
-    const messageStatus = guard !== 'safe' ? 'needs_review' :
+    const messageStatus = guard !== 'safe' || assessment.calibrated !== true ? 'needs_review' :
       assessment.label === 'contradiction' ? 'fail' :
       assessment.label === 'consistent' && assessment.calibrated ? 'pass' : 'needs_review';
     state.checks.push({ id: 'message_truth', required: true, status: messageStatus });
@@ -85,6 +87,7 @@ export class Runner {
     execution.result = {
       status, executionId: execution.id, checks: structuredClone(execution.state.checks),
       refunds: structuredClone(execution.state.refunds), events: structuredClone(execution.state.events), outbound: [],
+      judgmentSource: execution.judgmentSource ?? 'unverified-review',
     };
     this.store.save(execution);
     return structuredClone(execution.result);
