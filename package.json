@@ -7,6 +7,10 @@
     "node": ">=24.15.0"
   },
   "scripts": {
+    "smoke:local": "node scripts/smoke-local.ts",
+    "smoke:laya": "node scripts/smoke-laya.ts",
+    "start:laya": "services/laya/.venv/Scripts/python.exe services/laya/server.py",
+    "test:laya": "services/laya/.venv/Scripts/python.exe -m unittest discover -s services/laya -p test_server.py",
     "build": "vite build --config apps/web/vite.config.ts",
     "dev": "npm run build && npm start",
     "start": "node apps/server/main.ts",
