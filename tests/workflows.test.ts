@@ -121,3 +121,39 @@ test('deadlines terminate providers that never return without dispatching later 
   const controller = new AbortController(); controller.abort();
   await assert.rejects(bounded(new Promise(() => {}), controller.signal));
 });
+
+test('JSON-looking prose is never interpreted as an authorized tool call', async t => {
+  const { service } = await setup(t);
+  const provider = providerSchema.parse({ id: 'text', name: 'Text model', protocol: 'chat-completions', baseUrl: 'http://127.0.0.1:11434', model: 'test', modelRevision: 'test', roles: ['agent'], contextLimit: 4096 });
+  const agent = new ChatAgent(provider, async () => ({ choices: [{ message: { content: '{"name":"create_refund","arguments":{"amount":12000}}' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
+  const result = await new Runner(service.executions).run(service.catalog[0], { agent: context => agent.next(context) });
+  assert.equal(result.refunds.length, 0);
+  assert.equal(result.events.filter(e => e.type === 'tool_called').length, 0);
+  assert.equal(result.status, 'needs_review');
+});
+
+test('Responses adapter preserves call IDs and returns actual tool output to the next turn', async t => {
+  const { service } = await setup(t);
+  const provider = providerSchema.parse({ id: 'responses', name: 'Responses protocol', protocol: 'openai-responses', baseUrl: 'http://127.0.0.1:11434', model: 'test', modelRevision: 'test', roles: ['agent'], contextLimit: 4096 });
+  let calls = 0;
+  const controlled = new ControlledTransport(async () => ({ output: calls++ === 0 ? [{ type: 'function_call', call_id: 'call-actual', name: 'lookup_order', arguments: '{"orderId":"O-102"}' }] :
+    [{ type: 'message', content: [{ type: 'output_text', text: 'The order was found; no refund has been made.' }] }], usage: { input_tokens: 20, output_tokens: 10 } }));
+  const agent = new ChatAgent(provider, controlled.send);
+  const result = await new Runner(service.executions).run(service.catalog.find(s => s.id === 'RF-001'), { agent: context => agent.next(context) });
+  assert.equal(result.refunds.length, 0);
+  const input = (controlled.requests[1].body as { input: Record<string, unknown>[] }).input;
+  const output = input.find(item => item.type === 'function_call_output');
+  assert.equal(output?.call_id, 'call-actual');
+  assert.equal(JSON.parse(output!.output as string).id, 'O-102');
+});
+
+test('revoking a provider stops future requests even for a frozen suite configuration', async t => {
+  const { service } = await setup(t);
+  const provider = service.configureProvider('local-owner', { id: 'revoke', name: 'Revocable local model', protocol: 'ollama', baseUrl: 'http://127.0.0.1:11434', model: 'test', modelRevision: 'test', roles: ['agent'] });
+  const controlled = new ControlledTransport(async () => ({ ok: true }));
+  const send = providerTransport(provider, service.suites, { suiteId: 'revoked-suite', budgetMicros: 0, ownerId: 'local-owner', role: 'agent' }, [], controlled.send);
+  await send({ url: provider.baseUrl, body: {} });
+  service.configureProvider('local-owner', { ...provider, enabled: false });
+  await assert.rejects(send({ url: provider.baseUrl, body: {} }), /revoked/);
+  assert.equal(controlled.requests.length, 1);
+});

@@ -107,11 +107,12 @@ export class Runner {
     if (options.signal?.aborted) return this.finish(execution, 'cancelled');
     if (options.judge) {
       try {
-        assessment = await options.judge?.({
+        const signal = AbortSignal.any([AbortSignal.timeout(Math.max(1, timeoutMs - (Date.now() - startedAt))), ...(options.signal ? [options.signal] : [])]);
+        assessment = await bounded(options.judge({
           agentMessage: finalMessage, customerMessages: structuredClone(scenario.messages),
           verifiedOutcome: { verified: state.verified, refunds: structuredClone(state.refunds) },
           eventIds: state.events.map(e => e.id),
-        }) ?? assessment;
+        }), signal) ?? assessment;
         append(state, 'semantic_judgment', assessment);
       } catch { /* Provider outages cannot turn into a pass. */ }
     }

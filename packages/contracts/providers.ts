@@ -28,6 +28,8 @@ export const providerSchema = z.strictObject({
     if (value.engine === 'jev' && value.networkMode !== 'hybrid') throw new Error('Jev is hosted and opt-in');
     if (value.protocol === 'systemone' && !value.engine) throw new Error('System One engine required');
     if (value.roles.includes('agent') && value.protocol === 'systemone') throw new Error('System One cannot generate agent actions');
+    if (value.roles.includes('injection-guard') && value.protocol !== 'systemone') throw new Error('Injection-guard roles require System One');
+    if (value.roles.includes('judge') && value.protocol === 'openai-responses') throw new Error('Responses currently supports agent roles; use Chat Completions for a generative judge');
     if (value.protocol === 'ollama' && value.networkMode === 'hybrid') throw new Error('Ollama adapter requires a local or LAN model');
   } catch (error) { ctx.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid provider' }); }
 });

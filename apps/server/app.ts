@@ -10,6 +10,7 @@ import type { SuiteEvent } from '../../packages/contracts/api.ts';
 import { providerSchema } from '../../packages/contracts/providers.ts';
 import { ChatAgent } from '../../packages/providers/chat.ts';
 import { providerTransport } from '../../packages/providers/runtime.ts';
+import { scenarioSchema } from '../../packages/contracts/scenario.ts';
 
 const identifier = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/;
 const suiteInput = z.strictObject({
@@ -91,7 +92,9 @@ export async function buildApp(options: {
   app.post('/api/scenarios', async (request, reply) => {
     const input = z.strictObject({ sourceId: z.string().regex(identifier), title: z.string().min(6).max(200),
       messages: z.array(z.string().max(65536)).min(1).max(100), finalMessage: z.string().max(65536),
-      steps: z.array(z.strictObject({ tool: z.string().max(100), args: z.record(z.string(), z.unknown()) })).max(128).optional() }).safeParse(request.body);
+      steps: z.array(z.strictObject({ tool: z.string().max(100), args: z.record(z.string(), z.unknown()) })).max(128).optional(),
+      initial: scenarioSchema.shape.initial.optional(), faults: scenarioSchema.shape.faults.optional(),
+      retryLimit: scenarioSchema.shape.retryLimit.optional(), mockMode: scenarioSchema.shape.mockMode.optional() }).safeParse(request.body);
     if (!input.success) return reply.code(400).send({ error: 'Only explicit scenario copies are accepted; control metadata cannot be imported' });
     const { sourceId, ...edits } = input.data;
     return reply.code(201).send(service.duplicateScenario(request.session!.ownerId, sourceId, edits));
@@ -109,9 +112,12 @@ export async function buildApp(options: {
     const provider = input.success ? service.providers(request.session!.ownerId).find(p => p.id === input.data.id && p.enabled) : undefined;
     if (!provider) return reply.code(400).send({ error: 'Unknown provider' });
     try {
-      const send = providerTransport(provider, service.suites, { suiteId: 'health-' + request.id, budgetMicros: 0 }, service.secrets);
+      const send = providerTransport(provider, service.suites, { suiteId: 'health-' + request.id, budgetMicros: 0, ownerId: request.session!.ownerId }, service.secrets);
       const health = provider.protocol === 'systemone' ? await send({ url: provider.baseUrl + '/health', method: 'GET' }) : await new ChatAgent(provider, send).health();
-      return { ok: true, health, automaticAcceptanceEnabled: false };
+      if (provider.protocol === 'systemone') z.object({ model_revision: z.literal(provider.modelRevision), tokenizer_revision: z.literal(provider.tokenizerRevision) }).parse(health);
+      const capabilities = provider.protocol !== 'systemone' && provider.roles.includes('agent') ? await new ChatAgent(provider, send).probeTools() : { structuredTools: false, reason: 'Not an agent tool probe' };
+      service.suites.put(request.session!.ownerId, 'provider-probe', provider.id, { health, capabilities, at: new Date().toISOString() });
+      return { ok: true, health, capabilities, automaticAcceptanceEnabled: false };
     } catch { return reply.code(422).send({ error: 'Provider probe failed, lacked budget, or did not match the configured model' }); }
   });
   app.get('/api/reviews', async request => service.calibration(request.session!.ownerId));

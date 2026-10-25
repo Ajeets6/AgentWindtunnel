@@ -48,7 +48,7 @@ export function invoke(state: ShopState, scenario: Scenario, step: Step, call: n
   verificationCode: string): void {
   const operationId = randomUUID();
   append(state, 'tool_called', { tool: step.tool, args: step.tool === 'verify_customer' ? { code: '[REDACTED]' } : step.args }, operationId);
-  const schema = schemas[step.tool as keyof typeof schemas];
+  const schema: z.ZodType<Record<string, unknown>> | undefined = Object.hasOwn(schemas, step.tool) ? schemas[step.tool as keyof typeof schemas] : undefined;
   const parsed = schema?.safeParse(step.args);
   if (!parsed?.success) {
     fail(state, 'tool_schema');

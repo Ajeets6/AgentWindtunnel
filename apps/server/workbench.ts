@@ -42,10 +42,12 @@ export class Workbench {
   }
   get mutations() { return this.mutationCounter; }
   scenarios(ownerId: string): Scenario[] { return [...this.catalog, ...this.suites.documents<Scenario>(ownerId, 'scenario')]; }
-  duplicateScenario(ownerId: string, sourceId: string, edits: { title: string; messages: string[]; finalMessage: string; steps?: Scenario['steps'] }): Scenario {
+  duplicateScenario(ownerId: string, sourceId: string, edits: { title: string; messages: string[]; finalMessage: string } & Partial<Pick<Scenario, 'steps' | 'initial' | 'faults' | 'retryLimit' | 'mockMode'>>): Scenario {
     const source = this.scenarios(ownerId).find(s => s.id === sourceId);
     if (!source) throw Object.assign(new Error('Not found'), { statusCode: 404 });
-    const scenario = parseScenario({ ...source, ...edits, id: 'SC-' + randomUUID(), version: source.version + 1 });
+    let scenario: Scenario;
+    try { scenario = parseScenario({ ...source, ...edits, id: 'SC-' + randomUUID(), version: source.version + 1 }); }
+    catch { throw Object.assign(new Error('Invalid scenario data or fault schedule'), { statusCode: 400 }); }
     this.suites.put(ownerId, 'scenario', scenario.id, redact(scenario, this.secrets));
     this.mutationCounter++;
     return scenario;
@@ -68,13 +70,16 @@ export class Workbench {
   calibration(ownerId: string) {
     const reviews = this.suites.documents<Review>(ownerId, 'review');
     const matrix: Record<string, number> = {};
-    for (const review of reviews) {
+    const latest = new Map(reviews.map(review => [`${review.executionId}:${review.checkId}`, review]));
+    for (const review of latest.values()) {
       const execution = this.executions.load(review.executionId);
       const original = execution.result?.checks.find(c => c.id === review.checkId)?.status ?? 'missing';
-      const key = `${execution.result?.judgmentSource ?? 'unknown'}:${review.checkId}:${original}->${review.status}`;
+      const semantic = execution.state.events.filter(e => e.type === 'semantic_judgment').at(-1)?.data as { label?: string; diagnostics?: { provider?: string; modelRevision?: string } } | undefined;
+      const prediction = review.checkId === 'message_truth' ? semantic?.label ?? original : original;
+      const key = `${semantic?.diagnostics?.provider ?? execution.result?.judgmentSource ?? 'unknown'}:${semantic?.diagnostics?.modelRevision ?? 'fixture'}:${review.checkId}:v1:${prediction}->${review.status}`;
       matrix[key] = (matrix[key] ?? 0) + 1;
     }
-    return { reviewed: reviews.length, matrix, automaticAcceptanceEnabled: false, caveat: 'Operational review labels are not a held-out accuracy benchmark.' };
+    return { reviewed: reviews.length, uniqueAdjudications: latest.size, matrix, automaticAcceptanceEnabled: false, caveat: 'Latest operational labels per execution/check; not a held-out accuracy benchmark.' };
   }
   private save(suite: Suite, executionId?: string): void {
     suite.cancelRequested ||= this.suites.get(suite.id, suite.ownerId)?.cancelRequested ?? false;
@@ -145,8 +150,14 @@ export class Workbench {
             agent: async context => {
               const provider = suite.providers!.find(p => p.id === suite.config.agentId)!;
               const client = new ChatAgent(provider, providerTransport(provider, this.suites,
-                { suiteId: suite.id, budgetMicros: suite.config.cloudBudgetMicros ?? 0 }, this.secrets));
-              if (!context.history.length) await client.health(controller.signal);
+                { suiteId: suite.id, budgetMicros: suite.config.cloudBudgetMicros ?? 0, ownerId: suite.ownerId, role: 'agent' }, this.secrets));
+              if (provider.networkMode !== 'hybrid') {
+                const health = await client.health(controller.signal);
+                if (provider.protocol === 'ollama' && provider.modelRevision === provider.model) {
+                  provider.modelRevision = health.revision;
+                  this.save(suite, item!.id);
+                }
+              }
               return client.next(context);
             },
           } : {}),
@@ -155,7 +166,11 @@ export class Workbench {
           ...(!suite.config.fixtureJudges && suite.config.judgeProviderId ? {
             judge: async evidence => {
               const provider = suite.providers!.find(p => p.id === suite.config.judgeProviderId)!;
-              if (provider.protocol !== 'systemone') return { label: 'insufficient_evidence' as const, calibrated: false };
+              if (provider.protocol !== 'systemone') {
+                const client = new ChatAgent(provider, providerTransport(provider, this.suites, { suiteId: suite.id, budgetMicros: suite.config.cloudBudgetMicros ?? 0, ownerId: suite.ownerId, role: 'judge' }, this.secrets));
+                if (provider.networkMode !== 'hybrid') await client.health(controller.signal);
+                return client.judge(evidence, controller.signal);
+              }
               const client = decisionClient(provider, this.suites, suite.ownerId, { suiteId: suite.id, executionId: item!.id, budgetMicros: suite.config.cloudBudgetMicros ?? 0 }, this.secrets);
               const result = await client.evaluate({ evidence: JSON.stringify(evidence), complete: true, signal: controller.signal });
               return { label: result.label === 'consistent' || result.label === 'contradiction' ? result.label : 'insufficient_evidence' as const, calibrated: result.status === 'accepted',
@@ -167,7 +182,8 @@ export class Workbench {
             guard: async span => {
               const provider = suite.providers!.find(p => p.id === suite.config.guardProviderId)!;
               if (provider.protocol !== 'systemone') return 'unavailable' as const;
-              return decisionClient(provider, this.suites, suite.ownerId, { suiteId: suite.id, executionId: item!.id, budgetMicros: suite.config.cloudBudgetMicros ?? 0 }, this.secrets).screen(span.text, controller.signal);
+              return decisionClient(provider, this.suites, suite.ownerId, { suiteId: suite.id, executionId: item!.id, budgetMicros: suite.config.cloudBudgetMicros ?? 0, role: 'injection-guard' }, this.secrets)
+                .screen(span.text, AbortSignal.any([controller.signal, ...(span.signal ? [span.signal] : [])]));
             },
           } : {}),
           onCheckpoint: async () => {
@@ -196,7 +212,7 @@ export class Workbench {
       const execution = this.executions.load(item.id);
       const reviews = this.suites.documents<Review>(ownerId, 'review').filter(r => r.executionId === item.id);
       const effective = execution.state.checks.map(check => ({ ...check, status: reviews.filter(r => r.checkId === check.id).at(-1)?.status ?? check.status }));
-      const adjudicatedStatus: Status = ['error', 'cancelled', 'running'].includes(item.status) ? (item.status === 'running' ? 'needs_review' : item.status) :
+      const adjudicatedStatus: Status | undefined = item.status === 'running' ? undefined : ['error', 'cancelled'].includes(item.status) ? item.status as Status :
         effective.some(c => c.required && c.status === 'fail') ? 'failed' : effective.some(c => c.required && c.status !== 'pass') ? 'needs_review' : 'passed';
       return { ...item, title: execution.scenario.title, result: execution.result,
         before: execution.scenario.initial,

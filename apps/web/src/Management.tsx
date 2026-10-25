@@ -62,15 +62,18 @@ export function ScenarioEditor({ scenarios, onSaved }: { scenarios: Scenario[]; 
   const [messages, setMessages] = useState('');
   const [steps, setSteps] = useState('');
   const [finalMessage, setFinalMessage] = useState('');
+  const [initial, setInitial] = useState('');
+  const [faults, setFaults] = useState('[]');
   const [notice, setNotice] = useState('');
-  useEffect(() => { const item = scenarios.find(s => s.id === source); if (item) { setTitle(item.title + ' — copy'); setMessages(JSON.stringify(item.messages, null, 2)); setSteps(JSON.stringify(item.steps, null, 2)); setFinalMessage(item.finalMessage); } }, [source, scenarios]);
+  useEffect(() => { const item = scenarios.find(s => s.id === source); if (item) { setTitle(item.title + ' — copy'); setMessages(JSON.stringify(item.messages, null, 2)); setSteps(JSON.stringify(item.steps, null, 2)); setFinalMessage(item.finalMessage); setInitial(JSON.stringify(item.initial, null, 2)); setFaults(JSON.stringify(item.faults, null, 2)); } }, [source, scenarios]);
   return <details className="scenario-editor"><summary>Create an immutable scenario copy</summary><form className="management-form" onSubmit={async event => {
     event.preventDefault();
-    try { await request('/api/scenarios', { method: 'POST', body: JSON.stringify({ sourceId: source, title, messages: JSON.parse(messages), steps: JSON.parse(steps), finalMessage }) }); setNotice('New version saved. Existing suites retain their original scenario.'); await onSaved(); }
+    try { await request('/api/scenarios', { method: 'POST', body: JSON.stringify({ sourceId: source, title, messages: JSON.parse(messages), steps: JSON.parse(steps), initial: JSON.parse(initial), faults: JSON.parse(faults), finalMessage }) }); setNotice('New version saved. Existing suites retain their original scenario.'); await onSaved(); }
     catch (error) { setNotice(error instanceof Error ? error.message : 'Invalid scenario'); }
-  }}><p>Copy an authored case and edit customer messages, tool actions, and the final response. Policy, fault settings, guard metadata, and provider permissions stay inherited from the source.</p>
+  }}><p>Copy an authored case and edit its isolated shop state, messages, actions, faults and final response. Trusted policy revision, judge/guard metadata, and provider permissions stay inherited from the source.</p>
     <label>Source scenario<select aria-label="Source scenario" value={source} onChange={e => setSource(e.target.value)}>{scenarios.map(s => <option key={s.id} value={s.id}>{s.id} · {s.title}</option>)}</select></label>
     <label>Copy title<input required minLength={6} value={title} onChange={e => setTitle(e.target.value)} /></label><label>Customer messages (JSON array)<textarea rows={5} value={messages} onChange={e => setMessages(e.target.value)} /></label><label>Tool actions (JSON array)<textarea rows={8} value={steps} onChange={e => setSteps(e.target.value)} /></label><label>Final agent response<textarea rows={3} value={finalMessage} onChange={e => setFinalMessage(e.target.value)} /></label>
+    <label>Initial shop state (JSON)<textarea rows={8} value={initial} onChange={e => setInitial(e.target.value)} /></label><label>Fault schedule (JSON array)<textarea rows={5} value={faults} onChange={e => setFaults(e.target.value)} /></label>
     <button className="primary-button" type="submit">Save scenario copy</button>{notice && <p role="status">{notice}</p>}
   </form></details>;
 }

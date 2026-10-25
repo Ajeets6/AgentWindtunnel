@@ -142,7 +142,7 @@ export function App() {
 
         {page === 'runs' && <>
           <section className="run-controls" aria-label="Suite configuration"><div className="control-grid">
-            <label>SCENARIOS<select aria-label="Scenarios" value={scenarioId} onChange={e => setScenarioId(e.target.value)}><option value="all">Refunds v1 · all 40 scenarios</option>{scenarios.map(s => <option key={s.id} value={s.id}>{s.id} · {s.title}</option>)}</select></label>
+            <label>SCENARIOS<select aria-label="Scenarios" value={scenarioId} onChange={e => setScenarioId(e.target.value)}><option value="all">Refunds v1 · all {scenarios.length} scenarios</option>{scenarios.map(s => <option key={s.id} value={s.id}>{s.id} · {s.title}</option>)}</select></label>
             <label>AGENT<select aria-label="Agent" value={agentId} onChange={e => setAgentId(e.target.value)}>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label>
             <label className="repeat-control">REPEATS<input aria-label="Repeats" type="number" min="1" max="10" value={repeats} onChange={e => setRepeats(Number(e.target.value))} /></label>
             <button className="primary-button" disabled={launching || !Number.isInteger(repeats) || repeats < 1 || repeats > 10} onClick={() => void launch()}>{launching ? 'Starting…' : 'Run suite'}<span aria-hidden="true">↗</span></button>

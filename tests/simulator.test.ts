@@ -15,6 +15,14 @@ test('same idempotency key with changed amount is rejected without another write
   assert.equal(state.checks.find(c => c.id === 'tool_schema')?.status, 'fail');
 });
 
+test('prototype property names cannot escape the tool allowlist or crash tool validation', () => {
+  const scenario = parseScenario(scenarios[0]);
+  const state = initialState(scenario);
+  for (const tool of ['constructor', '__proto__', 'toString']) invoke(state, scenario, { tool, args: {} }, 1, 'test-code');
+  assert.equal(state.refunds.length, 0);
+  assert.equal(state.checks.find(c => c.id === 'tool_schema')?.status, 'fail');
+});
+
 test('verification accepts only the simulator-owned code and never logs it', () => {
   const scenario = parseScenario(scenarios.find(s => s.id === 'RF-004'));
   const state = initialState(scenario);
