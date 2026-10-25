@@ -29,7 +29,7 @@ contract('egress', 'actual assertion failure', async driver => {
   assert.equal((await driver.check({})).allowed, true, 'deliberately-broken-capability');
 });`);
   for (const strict of ['0', '1']) {
-    const childEnv = { ...process.env, AW_TEST_ADAPTER: adapter, AW_STRICT_TESTS: strict };
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, AW_TEST_ADAPTER: adapter, AW_STRICT_TESTS: strict };
     delete childEnv.NODE_TEST_CONTEXT;
     const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', spec], {
       env: childEnv, encoding: 'utf8', timeout: 10000
@@ -62,7 +62,7 @@ test('partial application adapters produce TODO in development and failure in re
   await writeFile(spec, `import { contract } from ${JSON.stringify(new URL('./support/harness.ts', import.meta.url).href)};
 contract('egress', 'must not appear implemented', async () => { throw new Error('unreachable'); });`);
   for (const strict of ['0', '1']) {
-    const childEnv = { ...process.env, AW_TEST_ADAPTER: adapter, AW_STRICT_TESTS: strict };
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, AW_TEST_ADAPTER: adapter, AW_STRICT_TESTS: strict };
     // A nested Node test runner otherwise inherits the parent's binary reporting channel.
     delete childEnv.NODE_TEST_CONTEXT;
     const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', spec], {

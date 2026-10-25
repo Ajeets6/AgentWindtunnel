@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { scenarios, initialScenarios, families, validateScenario } from './support/fixtures.ts';
+import type { Scenario } from './support/contracts.ts';
 
 test('initial pack has 30 unique authored scenarios across all ten design families', () => {
   assert.equal(initialScenarios.length, 30);
@@ -11,7 +12,7 @@ test('scenario IDs remain unique across every refund pack', () => {
   assert.equal(new Set(scenarios.map(s => s.id)).size, scenarios.length);
 });
 for (const scenario of scenarios) test(`fixture ${scenario.id}: ${scenario.title}`, () => validateScenario(scenario));
-for (const [name, mutate] of [
+const invalidCases: [string, (s: Scenario) => void][] = [
   ['fractional money', s => { s.initial.orders[0].paid = 0.1; }],
   ['unknown oracle check', s => { s.expected.failedChecks = ['made_up']; }],
   ['invalid fault phase', s => { s.faults = [{ kind: 'timeout', call: 1, phase: 'ambiguous' }]; }],
@@ -26,7 +27,8 @@ for (const [name, mutate] of [
   ['fault targeting the wrong tool', s => { s.steps = [{ tool: 'wait', args: {} }]; s.faults = [{ kind: 'timeout', call: 1, phase: 'before_commit' }]; }],
   ['inconsistent expected write count', s => { s.expected.refundsCreated = 0; }],
   ['unbounded retry setting', s => { s.retryLimit = 1000000; }]
-] as const) test(`fixture validator rejects ${name}`, () => {
+];
+for (const [name, mutate] of invalidCases) test(`fixture validator rejects ${name}`, () => {
   const changed = structuredClone(scenarios[0]);
   mutate(changed);
   assert.throws(() => validateScenario(changed));
