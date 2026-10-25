@@ -128,7 +128,7 @@ export function invoke(state: ShopState, scenario: Scenario, step: Step, call: n
   order.eligibleAmount = Math.max(0, order.eligibleAmount - args.amount);
   state.refunds.push(refund);
   state.keys[key] = { fingerprint, refund };
-  append(state, 'refund_committed', refund, operationId);
+  append(state, 'refund_committed', { ...refund, authorization: { verified: state.verified } }, operationId);
   if (fault?.kind === 'timeout' && fault.phase === 'after_commit') {
     state.afterCommitTimeout = true;
     state.consecutiveFailures++;

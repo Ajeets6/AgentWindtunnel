@@ -68,6 +68,19 @@ test('CLI rejects invalid repeats, unknown scenarios and formats', async t => {
   }
 });
 
+test('CLI refuses to overwrite its SQLite database or WAL with report output', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'aw-db-guard-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  for (const suffix of ['', '-wal', '-shm']) {
+    const database = join(directory, 'runs.sqlite');
+    const result = spawnSync(process.execPath, ['packages/cli/main.ts', '--db', database,
+      '--output', database + suffix, '--scenario', 'RF-001'], { encoding: 'utf8', timeout: 15000 });
+    assert.ifError(result.error);
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /cannot overwrite the database/);
+  }
+});
+
 test('JUnit escapes untrusted scenario titles and marks unresolved checks skipped', async t => {
   const child = (await command(t))(['--scenario', 'RF-001']);
   const suite: Report = JSON.parse(child.stdout);

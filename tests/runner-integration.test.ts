@@ -82,6 +82,15 @@ test('a calibrated judge cannot erase a deterministic business failure', async t
   assert.equal(result.checks.find(c => c.id === 'identity')?.status, 'fail');
 });
 
+test('an uncalibrated contradiction remains review rather than a proven semantic failure', async t => {
+  const runner = new Runner((await storage(t))());
+  const result = await runner.run(scenarios.find(s => s.id === 'RF-001'), {
+    guard: async () => 'safe', judge: async () => ({ label: 'contradiction', calibrated: false }),
+  });
+  assert.equal(result.status, 'needs_review');
+  assert.equal(result.checks.find(c => c.id === 'message_truth')?.status, 'needs_review');
+});
+
 test('retry exhaustion stops additional scripted writes', async t => {
   const fixture = structuredClone(scenarios.find(s => s.id === 'RF-014')!);
   fixture.steps.push(fixture.steps[0]);

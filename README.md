@@ -52,6 +52,8 @@ Exit codes: **0** for passing runs; **1** for agent failures, execution errors, 
 
 SQLite checkpoints atomically preserve simulated state, ledger and the next step. Resume does not blindly replay a committed step; optimistic revisions reject competing checkpoint updates. Budget reservation is currently an in-process utility, not a durable cloud dispatch system. The runner bounds scripted tool steps and retries; inference timeouts, worker leases and durable cloud budgets remain future work.
 
+A separate committed-state oracle reconciles actual refund rows, balances, authorization evidence and ledger events. It can detect excess/duplicate writes even if the mock shop's check flags were cleared. Attempted violations remain recorded separately when the mock shop blocks a write.
+
 The web UI, local HTTP API, real agent adapters, Laya/Jev providers, network policy enforcement and browser security implementation are still pending. Ordinary runner use does not promote fixture metadata into trusted semantic judgments. No payments, cloud inference or arbitrary tools are available to the scripted agent.
 
 Design notes are locally excluded by the repository's existing `.git/info/exclude`; that setting is preserved. Source, tests and this README are versioned. Commits remain local.

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { parseScenario } from '../contracts/scenario.ts';
 import type { RunResult, Status } from '../contracts/scenario.ts';
 import { append, initialState, invoke } from '../simulator/shop.ts';
+import { auditCommittedState } from '../judges/rules.ts';
 import { ExecutionStore } from './store.ts';
 import type { Execution } from './store.ts';
 
@@ -82,6 +83,9 @@ export class Runner {
   }
 
   private finish(execution: Execution, status: Status): RunResult {
+    auditCommittedState(execution.scenario, execution.state);
+    if ((status === 'passed' || status === 'needs_review') && execution.state.checks.some(c => c.required && c.status === 'fail'))
+      status = 'failed';
     execution.status = status;
     append(execution.state, 'execution_finished', { status });
     execution.result = {

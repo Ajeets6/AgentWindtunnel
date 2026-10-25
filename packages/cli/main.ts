@@ -1,4 +1,4 @@
-import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
+import { readFile, readdir, mkdir, writeFile, realpath } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { parseScenario } from '../contracts/scenario.ts';
@@ -39,7 +39,15 @@ async function main(): Promise<number> {
   const selected = scenarios.filter(s => !values.scenario || s.id === values.scenario);
   if (!selected.length) throw new Error('Unknown scenario ID');
   const databasePath = resolve(values.db!);
-  if (values.output && resolve(values.output) === databasePath) throw new Error('Report output cannot overwrite the database');
+  if (values.output) {
+    const outputPath = resolve(values.output);
+    const canonicalOutput = await realpath(outputPath).catch(() => outputPath);
+    const canonicalDatabase = await realpath(databasePath).catch(() => databasePath);
+    const normalize = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path;
+    if ([canonicalDatabase, canonicalDatabase + '-wal', canonicalDatabase + '-shm']
+      .some(path => normalize(path) === normalize(canonicalOutput)))
+      throw new Error('Report output cannot overwrite the database or its journal');
+  }
   await mkdir(dirname(databasePath), { recursive: true });
   const store = new ExecutionStore(databasePath);
   const runner = new Runner(store);

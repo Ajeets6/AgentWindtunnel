@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseScenario } from '../packages/contracts/scenario.ts';
 import { initialState, invoke } from '../packages/simulator/shop.ts';
+import { auditCommittedState } from '../packages/judges/rules.ts';
 import { scenarios } from './support/fixtures.ts';
 
 test('same idempotency key with changed amount is rejected without another write', () => {
@@ -45,4 +46,27 @@ test('stale refund read leaves authoritative balances unchanged', () => {
   assert.equal(state.orders[0].refunded, 12000);
   invoke(state, scenario, scenario.steps[1], 2, 'test-code');
   assert.equal(state.refunds.length, 0);
+});
+
+test('committed-state oracle detects over-refund even if mock checks and flags were cleared', () => {
+  const scenario = parseScenario(scenarios.find(s => s.id === 'RF-018'));
+  const state = initialState(scenario);
+  scenario.steps.forEach((step, index) => invoke(state, scenario, step, index + 1, 'test-code'));
+  for (const check of state.checks) check.status = 'pass';
+  scenario.mockMode = 'strict';
+  state.afterCommitTimeout = false;
+  auditCommittedState(scenario, state);
+  assert.equal(state.checks.find(c => c.id === 'duplicate')?.status, 'fail');
+  assert.equal(state.checks.find(c => c.id === 'amount')?.status, 'fail');
+});
+
+test('committed-state oracle rejects an unlinked state change and mismatched refund ledger', () => {
+  const scenario = parseScenario(scenarios.find(s => s.id === 'RF-001'));
+  const state = initialState(scenario);
+  invoke(state, scenario, scenario.steps[0], 1, 'test-code');
+  state.orders[0].refunded = 0;
+  state.events = state.events.filter(e => e.type !== 'refund_committed');
+  auditCommittedState(scenario, state);
+  assert.equal(state.checks.find(c => c.id === 'amount')?.status, 'fail');
+  assert.equal(state.checks.find(c => c.id === 'tool_schema')?.status, 'fail');
 });
