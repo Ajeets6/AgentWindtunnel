@@ -11,6 +11,7 @@ import { providerSchema } from '../../packages/contracts/providers.ts';
 import { ChatAgent } from '../../packages/providers/chat.ts';
 import { providerTransport } from '../../packages/providers/runtime.ts';
 import { scenarioSchema } from '../../packages/contracts/scenario.ts';
+import { agentSchema } from '../../packages/contracts/agent.ts';
 
 const identifier = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/;
 const suiteInput = z.strictObject({
@@ -18,6 +19,7 @@ const suiteInput = z.strictObject({
   repeats: z.number().int().min(1).max(10),
   scenarioIds: z.array(z.string().regex(identifier)).min(1).max(40).refine(a => new Set(a).size === a.length).optional(),
   fixtureJudges: z.boolean().default(false),
+  defenseMode: z.enum(['observe', 'enforce']).default('observe'),
   judgeProviderId: z.string().regex(identifier).optional(), guardProviderId: z.string().regex(identifier).optional(),
   cloudBudgetMicros: z.number().int().min(0).max(10000000).default(0), baselineId: z.string().regex(identifier).optional(),
 });
@@ -100,7 +102,12 @@ export async function buildApp(options: {
     return reply.code(201).send(service.duplicateScenario(request.session!.ownerId, sourceId, edits));
   });
   app.get('/api/agents', async request => ({ agents: [{ id: 'fixture-safe', name: 'Authored fixture agent', kind: 'scripted',
-    description: 'Replays authored actions, including deliberate mistakes.' }, ...service.providers(request.session!.ownerId).filter(p => p.enabled && p.roles.includes('agent')).map(p => ({ id: p.id, name: p.name, kind: p.protocol, description: p.model }))] }));
+    description: 'Replays authored actions, including deliberate mistakes.' }, ...service.agents(request.session!.ownerId).filter(a => a.enabled).map(a => ({ ...a, kind: 'agent-profile', description: a.providerId })), ...service.providers(request.session!.ownerId).filter(p => p.enabled && p.roles.includes('agent')).map(p => ({ id: p.id, name: p.name, kind: p.protocol, description: p.model }))] }));
+  app.post('/api/agents', async (request, reply) => {
+    const input = agentSchema.safeParse(request.body);
+    if (!input.success) return reply.code(400).send({ error: 'Invalid agent profile' });
+    return reply.code(201).send(service.configureAgent(request.session!.ownerId, input.data));
+  });
   app.get('/api/settings', async request => ({ providers: service.providers(request.session!.ownerId), semanticJudging: 'Human-gated until held-out calibration is established.' }));
   app.post('/api/providers', async (request, reply) => {
     const input = providerSchema.safeParse(request.body);

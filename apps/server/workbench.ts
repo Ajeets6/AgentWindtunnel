@@ -16,6 +16,7 @@ import { decisionClient } from '../../packages/providers/runtime.ts';
 import { providerTransport } from '../../packages/providers/runtime.ts';
 import { ChatAgent } from '../../packages/providers/chat.ts';
 import type { Status } from '../../packages/contracts/scenario.ts';
+import { agentSchema, type AgentProfile } from '../../packages/contracts/agent.ts';
 
 export class Workbench {
   readonly suites: SuiteStore;
@@ -53,8 +54,20 @@ export class Workbench {
     return scenario;
   }
   providers(ownerId: string): ProviderConfig[] { return this.suites.documents(ownerId, 'provider'); }
+  agents(ownerId: string): AgentProfile[] { return this.suites.documents(ownerId, 'agent'); }
+  configureAgent(ownerId: string, input: unknown): AgentProfile {
+    const profile = agentSchema.parse(input);
+    if (!this.providers(ownerId).some(p => p.id === profile.providerId && p.roles.includes('agent')))
+      throw Object.assign(new Error('Agent provider unavailable'), { statusCode: 400 });
+    if (this.providers(ownerId).some(p => p.id === profile.id) || profile.id === 'fixture-safe')
+      throw Object.assign(new Error('Agent ID collides with provider or fixture'), { statusCode: 400 });
+    this.suites.put(ownerId, 'agent', profile.id, profile);
+    this.mutationCounter++; return profile;
+  }
   configureProvider(ownerId: string, input: unknown): ProviderConfig {
     const config = providerSchema.parse(input);
+    if (config.id === 'fixture-safe' || this.agents(ownerId).some(agent => agent.id === config.id))
+      throw Object.assign(new Error('Provider ID collides with agent or fixture'), { statusCode: 400 });
     this.suites.put(ownerId, 'provider', config.id, config);
     this.mutationCounter++; return config;
   }
@@ -96,7 +109,12 @@ export class Workbench {
     const suite: Suite = { id: randomUUID(), ownerId, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       status: 'queued', config, scenarios: structuredClone(scenarios), executions: [], total: scenarios.length * config.repeats,
       cancelRequested: false, providers: structuredClone(this.providers(ownerId)) };
-    for (const [id, role] of [[config.agentId === 'fixture-safe' ? undefined : config.agentId, 'agent'], [config.judgeProviderId, 'judge'], [config.guardProviderId, 'injection-guard']] as const)
+    const profile = this.agents(ownerId).find(a => a.id === config.agentId);
+    if (profile && !profile.enabled) throw Object.assign(new Error('Agent disabled'), { statusCode: 400 });
+    suite.agentProfile = profile && structuredClone(profile);
+    if (config.defenseMode === 'enforce' && (!config.guardProviderId || config.fixtureJudges))
+      throw Object.assign(new Error('Enforcement requires a real guard provider'), { statusCode: 400 });
+    for (const [id, role] of [[config.agentId === 'fixture-safe' ? undefined : profile?.providerId ?? config.agentId, 'agent'], [config.judgeProviderId, 'judge'], [config.guardProviderId, 'injection-guard']] as const)
       if (id && !suite.providers!.some(p => p.id === id && p.enabled && p.roles.includes(role))) throw Object.assign(new Error('Provider or role unavailable'), { statusCode: 400 });
     if (config.baselineId && !this.suites.get(config.baselineId, ownerId)) throw Object.assign(new Error('Baseline not found'), { statusCode: 404 });
     this.save(suite);
@@ -146,11 +164,13 @@ export class Workbench {
         }
         const result = await this.runner.resume(item.id, {
           signal: controller.signal,
+          defenseMode: suite.config.defenseMode ?? 'observe',
+          ...(suite.agentProfile ? { allowedTools: suite.agentProfile.tools, maxTurns: suite.agentProfile.maxTurns } : {}),
           ...(suite.config.agentId !== 'fixture-safe' ? {
             agent: async context => {
-              const provider = suite.providers!.find(p => p.id === suite.config.agentId)!;
+              const provider = suite.providers!.find(p => p.id === (suite.agentProfile?.providerId ?? suite.config.agentId))!;
               const client = new ChatAgent(provider, providerTransport(provider, this.suites,
-                { suiteId: suite.id, budgetMicros: suite.config.cloudBudgetMicros ?? 0, ownerId: suite.ownerId, role: 'agent' }, this.secrets));
+                { suiteId: suite.id, budgetMicros: suite.config.cloudBudgetMicros ?? 0, ownerId: suite.ownerId, role: 'agent' }, this.secrets), suite.agentProfile);
               if (provider.networkMode !== 'hybrid') {
                 const health = await client.health(controller.signal);
                 if (provider.protocol === 'ollama' && provider.modelRevision === provider.model) {

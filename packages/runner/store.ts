@@ -11,6 +11,7 @@ export type Execution = {
   agentHistory?: AgentMessage[]; responseItems?: Record<string, unknown>[]; pendingCalls?: (Step & { id: string })[];
   agentTurns?: number; finalMessage?: string;
   agentMode?: 'model' | 'scripted';
+  defenseMode?: 'observe' | 'enforce';
 };
 
 /** Atomic document checkpoints keep simulated commits, ledger and cursor together. */

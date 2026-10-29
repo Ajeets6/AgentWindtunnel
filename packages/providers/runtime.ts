@@ -24,7 +24,9 @@ export function providerTransport(provider: ProviderConfig, store: SuiteStore, s
     if (hosted) {
       if (!provider.cloudConsent || !provider.prices) throw new Error('Hosted permission or pricing unavailable');
       const inputBound = Math.max(provider.contextLimit, 2 * Buffer.byteLength(JSON.stringify(request.body ?? {})) + 256);
-      const maximum = Math.ceil((inputBound * provider.prices.input + 512 * provider.prices.output) / 1000000);
+      const outputBound = Number((request.body as Record<string, unknown> | undefined)?.max_output_tokens ?? (request.body as Record<string, unknown> | undefined)?.max_tokens ?? 512);
+      if (!Number.isSafeInteger(outputBound) || outputBound < 1 || outputBound > 4096) throw new Error('Invalid output budget');
+      const maximum = Math.ceil((inputBound * provider.prices.input + outputBound * provider.prices.output) / 1000000);
       reservation = store.reserve(scope.suiteId, scope.budgetMicros, Math.max(1, maximum));
     }
     // Redact before any hosted egress. Auth is attached only after redaction.

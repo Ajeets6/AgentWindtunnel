@@ -23,6 +23,8 @@ export type RunOptions = {
   judgmentSource?: RunResult['judgmentSource'];
   judge?: (evidence: Evidence) => Promise<Assessment>;
   guard?: Guard;
+  defenseMode?: 'observe' | 'enforce';
+  allowedTools?: string[];
   /** Internal observer; exceptions model a worker dying after a durable checkpoint. */
   onCheckpoint?: (execution: Readonly<Execution>) => void | Promise<void>;
 };
@@ -58,11 +60,31 @@ export class Runner {
     const maxTurns = options.maxTurns ?? 16;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000 || !Number.isSafeInteger(maxTurns) || maxTurns < 1 || maxTurns > 100) throw new Error('Invalid execution bounds');
     const { state, scenario } = execution;
+    execution.defenseMode ??= options.defenseMode ?? 'observe';
+    if (execution.defenseMode !== (options.defenseMode ?? 'observe')) throw new Error('Resume requires the original defense mode');
+    const screen = async (payload: string, source: string): Promise<boolean> => {
+      if (options.defenseMode === undefined && !options.agent) return true;
+      if (!options.guard && execution.defenseMode === 'observe') return true;
+      let record;
+      try { record = await new IsolationBoundary(options.guard ?? (async () => 'unavailable')).ingest(payload, source, 'workbench'); }
+      catch { /* Oversize evidence is unresolved, never safe. */ }
+      const blocked = execution.defenseMode === 'enforce' && (!record || record.reviewRequired);
+      if ((!record || record.reviewRequired) && !state.checks.some(check => check.id === 'runtime_defense'))
+        state.checks.push({ id: 'runtime_defense', required: true, status: 'needs_review' });
+      append(state, 'defense_screened', { source, mode: execution.defenseMode, blocked,
+        coverageComplete: record?.coverageComplete ?? false, hash: record?.hash,
+        spans: record?.spans ?? [], reviewRequired: record?.reviewRequired ?? true });
+      this.store.save(execution);
+      return !blocked;
+    };
     while (options.agent || execution.cursor < scenario.steps.length) {
       if (options.signal?.aborted) return this.finish(execution, 'cancelled');
       if (execution.cursor >= maxSteps || Date.now() - startedAt >= timeoutMs) return this.finish(execution, 'error');
       if (state.checks.find(c => c.id === 'retry_limit')?.status === 'fail') break;
       if (options.agent && !execution.pendingCalls?.length) {
+        if (!await screen(JSON.stringify({ customer: scenario.messages, history: execution.agentHistory ?? [] }), 'agent-input'))
+          return this.finish(execution, 'needs_review');
+        if (options.signal?.aborted) return this.finish(execution, 'cancelled');
         if ((execution.agentTurns ?? 0) >= maxTurns) return this.finish(execution, 'error');
         try {
           const signal = AbortSignal.any([AbortSignal.timeout(Math.max(1, timeoutMs - (Date.now() - startedAt))), ...(options.signal ? [options.signal] : [])]);
@@ -79,6 +101,14 @@ export class Runner {
         } catch { append(state, 'provider_error', { error: 'Agent request failed or returned invalid output' }); return this.finish(execution, options.signal?.aborted ? 'cancelled' : 'error'); }
       }
       const step = options.agent ? execution.pendingCalls![0] : scenario.steps[execution.cursor];
+      if (options.allowedTools && !options.allowedTools.includes(step.tool)) {
+        state.checks.push({ id: 'tool_permission', required: true, status: 'fail' });
+        append(state, 'tool_denied', { tool: step.tool, reason: 'Tool outside agent permissions' });
+        return this.finish(execution, 'failed');
+      }
+      if (!await screen(JSON.stringify({ proposedAction: step, verified: state.verified,
+        orders: state.orders, refunds: state.refunds }), 'tool-proposal')) return this.finish(execution, 'needs_review');
+      if (options.signal?.aborted) return this.finish(execution, 'cancelled');
       invoke(state, scenario, step, execution.cursor + 1, verificationCode);
       if (options.agent) {
         const call = execution.pendingCalls!.shift()!;
