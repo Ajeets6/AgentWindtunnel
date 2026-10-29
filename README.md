@@ -46,3 +46,5 @@ Synthetic judgments do not measure model accuracy. Real semantic judgments remai
 </details>
 
 See the [full guide](docs/README.md) for API routes, provider configuration, the optional Laya sidecar, security boundaries, and current limitations.
+
+The [agent and defense refactor plan](REFACTOR_PLAN.md) describes configurable tool-using agents, local Laya runtime screening, observation/enforcement modes, local evaluation and staged OpenAI/Jev comparisons. Start Laya with `npm run start:laya`; `npm start` seeds missing provider connections and nine editable agent profiles. `npm run evaluate:agents` runs an opt-in local model evaluation with Laya and saves reports under `data/agent-evaluation/`.
