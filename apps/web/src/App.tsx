@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { request, signIn } from './api.ts';
 import { Inspector, Outcome } from './Inspector.tsx';
 import type { Suite, SuiteDetail, ExecutionView } from '../../../packages/contracts/api.ts';
 import type { Scenario } from '../../../packages/contracts/scenario.ts';
 import type { ProviderConfig } from '../../../packages/contracts/providers.ts';
-import { ProviderSettings, ReviewWorkspace, ScenarioEditor } from './Management.tsx';
+import { AgentEditor, ProviderSettings, ReviewWorkspace, ScenarioEditor } from './Management.tsx';
 
 const navigation = [{ id: 'runs', label: 'Runs', glyph: '▤' }, { id: 'scenarios', label: 'Scenarios', glyph: '◇' },
   { id: 'agents', label: 'Agents', glyph: '⌘' }, { id: 'judges', label: 'Judge lab', glyph: '⊞' }, { id: 'settings', label: 'Settings', glyph: '⚙' }];
@@ -21,6 +21,7 @@ export function App() {
   const [scenarioId, setScenarioId] = useState('all');
   const [repeats, setRepeats] = useState(1);
   const [fixtureJudges, setFixtureJudges] = useState(false);
+  const [defenseMode, setDefenseMode] = useState<'observe' | 'enforce'>('observe');
   const [launching, setLaunching] = useState(false);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -33,10 +34,16 @@ export function App() {
   const [budgetUsd, setBudgetUsd] = useState(0);
   const [baselineId, setBaselineId] = useState('');
   const [comparison, setComparison] = useState<{ pairs: { scenarioId: string; repetition: number; previous: string | null; current: string; regression: boolean }[] }>();
+  const defaultsApplied = useRef(false);
   const refreshCapabilities = useCallback(async () => {
     const [catalog, settings, agentList] = await Promise.all([request<{ scenarios: Scenario[] }>('/api/scenarios'),
       request<{ providers: ProviderConfig[] }>('/api/settings'), request<{ agents: typeof agents }>('/api/agents')]);
     setScenarios(catalog.scenarios); setProviders(settings.providers); setAgents(agentList.agents);
+    if (!defaultsApplied.current) {
+      defaultsApplied.current = true;
+      if (settings.providers.some(p => p.id === 'laya-local' && p.enabled)) { setJudgeId('laya-local'); setGuardId('laya-local'); }
+      if (agentList.agents.some(a => a.id === 'ollama-qwen3-careful')) setAgentId('ollama-qwen3-careful');
+    }
   }, []);
 
   const loadSuites = useCallback(async () => {
@@ -106,7 +113,7 @@ export function App() {
     try {
       const selection = chosen ?? scenarioId;
       const result = await request<{ id: string }>('/api/suites', { method: 'POST', body: JSON.stringify({
-        scenarioPack: 'refunds-v1', agentId, repeats, fixtureJudges, cloudBudgetMicros: Math.round(budgetUsd * 1000000),
+        scenarioPack: 'refunds-v1', agentId, repeats, fixtureJudges, defenseMode, cloudBudgetMicros: Math.round(budgetUsd * 1000000),
         ...(judgeId ? { judgeProviderId: judgeId } : {}), ...(guardId ? { guardProviderId: guardId } : {}), ...(baselineId ? { baselineId } : {}),
         ...(selection !== 'all' ? { scenarioIds: [selection] } : {}),
       }) });
@@ -151,6 +158,7 @@ export function App() {
             <details className="advanced-controls"><summary>Judges, baseline & hosted budget</summary><div className="management-grid">
               <label>Judge provider<select value={judgeId} onChange={e => setJudgeId(e.target.value)}><option value="">Human review only</option>{providers.filter(p => p.enabled && p.roles.includes('judge')).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
               <label>Injection guard<select value={guardId} onChange={e => setGuardId(e.target.value)}><option value="">Unverified / review</option>{providers.filter(p => p.enabled && p.roles.includes('injection-guard')).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+              <label>Defense mode<select aria-label="Defense mode" value={defenseMode} onChange={e => setDefenseMode(e.target.value as typeof defenseMode)}><option value="observe">Observe · measure agent behavior</option><option value="enforce">Enforce · stop on unsafe or unresolved evidence</option></select></label>
               <label>Baseline suite<select aria-label="Baseline suite" value={baselineId} onChange={e => setBaselineId(e.target.value)}><option value="">No baseline</option>{suites.filter(s => s.id !== suiteId).map(s => <option key={s.id} value={s.id}>{s.id.slice(0, 8)} · {s.status}</option>)}</select></label>
               <label>Hosted budget (USD)<input type="number" min="0" max="10" step="0.001" value={budgetUsd} onChange={e => setBudgetUsd(Number(e.target.value))} /></label>
             </div></details></section>
@@ -181,7 +189,7 @@ export function App() {
           <div className="scenario-cards">{filteredScenarios.map(s => <article key={s.id} className="scenario-card"><div className="row spread"><span className="mono scenario-id">{s.id}</span><span className="family-label">{s.family.replaceAll('-', ' ')}</span></div><h3>{s.title}</h3><p>{s.messages[0]}</p><div className="card-details"><span>{s.steps.length} tool calls</span><span>{s.faults.length ? `${s.faults.length} injected faults` : 'No injected faults'}</span></div><div className="row spread"><span className="muted mono">policy {s.policyVersion} · v{s.version}</span><button className="text-button" disabled={launching} onClick={() => { setScenarioId(s.id); void launch(s.id); }}>Run case →</button></div></article>)}</div>
           {!filteredScenarios.length && <p className="empty-state">No scenarios match your search.</p>}</section>}
 
-        {page === 'agents' && <section className="info-card"><span className="eyebrow">AVAILABLE AGENTS</span><h2>Fixture and configured model agents</h2><p>All agent actions are routed through the isolated shop tool allowlist. Provider output cannot execute shell commands, SQL, arbitrary HTTP or filesystem operations.</p>{agents.map(agent => <article className="provider-row" key={agent.id}><div><strong>{agent.name}</strong><p>{agent.description}</p><span className="mode-badge">{agent.kind}</span></div><button className="small-button" onClick={() => { setAgentId(agent.id); setPage('runs'); }}>Select agent</button></article>)}<button className="text-button" onClick={() => setPage('settings')}>Configure another provider →</button></section>}
+        {page === 'agents' && <section className="info-card"><span className="eyebrow">AVAILABLE AGENTS</span><h2>Agent behavior and tool permissions</h2><p>All agent actions run in the isolated mock shop. Each profile defines its system prompt, tools and behavior settings.</p><AgentEditor providers={providers} onSaved={refreshCapabilities} />{agents.map(agent => <article className="provider-row" key={agent.id}><div><strong>{agent.name}</strong><p>{agent.description}</p><span className="mode-badge">{agent.kind}</span><pre>{JSON.stringify(agent, null, 2)}</pre></div><button className="small-button" onClick={() => { setAgentId(agent.id); setPage('runs'); }}>Select agent</button></article>)}<button className="text-button" onClick={() => setPage('settings')}>Configure another provider →</button></section>}
 
         {page === 'judges' && <ReviewWorkspace suite={suite} onReviewed={async () => { if (suiteId) setSuite(await request<SuiteDetail>(`/api/suites/${suiteId}`)); }} />}
 

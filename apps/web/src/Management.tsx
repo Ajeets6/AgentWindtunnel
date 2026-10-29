@@ -3,6 +3,24 @@ import { request } from './api.ts';
 import type { ProviderConfig } from '../../../packages/contracts/providers.ts';
 import type { Scenario } from '../../../packages/contracts/scenario.ts';
 import type { SuiteDetail } from '../../../packages/contracts/api.ts';
+import { defaultSystemPrompt } from '../../../packages/contracts/agent.ts';
+
+export function AgentEditor({ providers, onSaved }: { providers: ProviderConfig[]; onSaved: () => Promise<void> }) {
+  const [definition, setDefinition] = useState(JSON.stringify({ id: 'my-agent', name: 'My refund agent',
+    providerId: providers.find(p => p.roles.includes('agent'))?.id ?? 'ollama-qwen3', systemPrompt: defaultSystemPrompt,
+    tools: ['lookup_order', 'get_refund_policy', 'request_verification', 'verify_customer', 'get_refund_status', 'create_refund', 'wait'],
+    temperature: 0.2, reasoningEffort: 'none', maxTurns: 16, maxOutputTokens: 1024, enabled: true }, null, 2));
+  const [notice, setNotice] = useState('');
+  return <details className="scenario-editor"><summary>Create or update an agent profile</summary>
+    <form className="management-form" onSubmit={async event => {
+      event.preventDefault();
+      try { await request('/api/agents', { method: 'POST', body: JSON.stringify(JSON.parse(definition)) }); await onSaved(); setNotice('Agent saved. New runs snapshot this definition.'); }
+      catch (error) { setNotice(String(error)); }
+    }}><p>Set the provider, system prompt, allowed tools, temperature, turn limit and output budget. Use an existing profile ID to update future runs. Responses providers use their model’s default sampling settings.</p>
+      <label>Agent definition (JSON)<textarea rows={18} value={definition} onChange={e => setDefinition(e.target.value)} /></label>
+      <button className="primary-button" type="submit">Save agent profile</button><p role="status">{notice}</p>
+    </form></details>;
+}
 
 export function ProviderSettings({ providers, onSaved }: { providers: ProviderConfig[]; onSaved: () => Promise<void> }) {
   const [protocol, setProtocol] = useState<ProviderConfig['protocol']>('ollama');

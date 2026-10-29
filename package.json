@@ -7,6 +7,8 @@
     "node": ">=24.15.0"
   },
   "scripts": {
+    "configure:agents": "node scripts/configure-agents.ts",
+    "evaluate:agents": "node scripts/evaluate-agents.ts",
     "smoke:local": "node scripts/smoke-local.ts",
     "smoke:laya": "node scripts/smoke-laya.ts",
     "start:laya": "services/laya/.venv/Scripts/python.exe services/laya/server.py",
